@@ -13,6 +13,7 @@ import logging
 import time
 from pathlib import Path
 
+
 import torch
 import torch.optim as optim
 
@@ -81,3 +82,5 @@ def save_checkpoint(states, is_best, output_dir,
     if is_best and 'state_dict' in states:
         torch.save(states['state_dict'],
                    os.path.join(output_dir, 'model_best.pth.tar'))
+
+
