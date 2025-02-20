@@ -1,9 +1,9 @@
 GPUS: '0'
 DATA_DIR: ''
-OUTPUT_DIR: 'output/cau_newformat/tmp/val/'
-LOG_DIR: 'log/cau_newformat/tmp/val'
+OUTPUT_DIR: 'output/'
+LOG_DIR: 'log/'
 WORKERS: 1
-PRINT_FREQ: 10
+PRINT_FREQ: 100
 DATASET:
   DATASET: 'coco'
   ROOT: 'data/coco/'
@@ -16,7 +16,7 @@ DATASET:
   SCALE_FACTOR: 0
 MODEL:
   NAME: 'pose_resnet'
-  PRETRAINED: 'output/cau_newformat/tmp/coco/pose_resnet_50/384x288_d256x3_adam_lr1e-3-RHPE-Foot-N3-Doctor-noflip-cau-newformat-one/model_best.pth.tar'
+  PRETRAINED: 'ckpt/detector/final_state.pth.tar'
 # MayBe need to use pretrained weight for foot x-ray image.
 #  PRETRAINED: 'output/retrained/coco/pose_resnet_50/384x288_d256x3_adam_lr1e-3-RHPE-Foot-N2-Doctor-noflip/final_state.pth.tar'
   IMAGE_SIZE:
@@ -62,20 +62,19 @@ TRAIN:
   MOMENTUM: 0.9
   NESTEROV: false
 TEST:
-  BATCH_SIZE: 4
-  COCO_FILE: 'data/coco/annotations/Foot/new/foot_new_0210__test.json'
-  COCO_BBOX_FILE: 'data/coco/annotations/Foot/new/foot_new_0210__test.json'
+  BATCH_SIZE: 32
+  COCO_FILE: 'data/json/foot_new_0210__test.json'
+  COCO_BBOX_FILE: 'data/json/joint/bbox_from_yolo_new.json'
   BBOX_THRE: 1.0
   FLIP_TEST: false
-  IMAGE_THRE: 0.0
+  IMAGE_THRE: 0.8
   IN_VIS_THRE: 0.2
-  MODEL_FILE: 'output/cau_newformat/tmp/coco/pose_resnet_50/384x288_d256x3_adam_lr1e-3-RHPE-Foot-N3-Doctor-noflip-cau-newformat-one/model_best.pth.tar'
-  NMS_THRE: 1.0
+  MODEL_FILE: 'ckpt/detector/final_state.pth.tar' # Need new one.
   OKS_THRE: 0.5
-  USE_GT_BBOX: true
+  USE_GT_BBOX: false
 DEBUG:
   DEBUG: true
-  SAVE_BATCH_IMAGES_GT: true
+  SAVE_BATCH_IMAGES_GT: false
   SAVE_BATCH_IMAGES_PRED: true
-  SAVE_HEATMAPS_GT: true
+  SAVE_HEATMAPS_GT: false
   SAVE_HEATMAPS_PRED: true
