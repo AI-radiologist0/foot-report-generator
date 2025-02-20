@@ -102,6 +102,7 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir,
     all_boxes = np.zeros((num_samples, 6))
     image_path = []
     image_id = []
+    letter_bbox = []
     filenames = []
     imgnums = []
     idx = 0
@@ -170,6 +171,8 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir,
             all_boxes[idx:idx + num_images, 5] = score
             image_path.extend(meta['image'])
             image_id.extend(meta['image_id'])
+            # letter_bbox.extend(meta['letter_bbox'])
+            
             if config.DATASET.DATASET == 'posetrack':
                 filenames.extend(meta['filename'])
                 imgnums.extend(meta['imgnum'].numpy())
