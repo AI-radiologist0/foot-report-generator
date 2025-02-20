@@ -137,3 +137,5 @@ ckpt/
 
 # any zip file
 .zip
+
+data/
