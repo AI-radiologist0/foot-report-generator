@@ -93,6 +93,7 @@ def process_json(json_path):
                     "letter_bbox": letter_bbox,
                     "bbox": item['bbox'],
                     "image_id": item["image_id"],
+                    "score": item["score"],
                     "detected_text": text,
                 })
                 count += 1
@@ -112,7 +113,7 @@ json_path = "data/json/joint/bbox_from_yolo_new.json"
 ocr_results = process_json(json_path)
 
 # 결과 저장 (JSON 파일로 저장 가능)
-output_path = "./data/json/joint/ocr_results.json"
+output_path = "./data/json/joint/ocr_results_v1.json"
 with open(output_path, 'w', encoding='utf-8') as f:
     json.dump(ocr_results, f, ensure_ascii=False, indent=4)
 
