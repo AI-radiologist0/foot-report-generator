@@ -171,7 +171,7 @@ def main():
             break
         
         # logging data (Wandb)
-        wandb.log({"train_loss": train_loss, "train_acc": train_acc, "val_loss": val_loss, "val_performance": val_perf,
+        run.log({"train_loss": train_loss, "train_acc": train_acc, "val_loss": val_loss, "val_performance": val_perf,
                        "precision": precision, "recall": recall, "f1_score": f1, "epoch": epoch}, step=epoch)
         
         
