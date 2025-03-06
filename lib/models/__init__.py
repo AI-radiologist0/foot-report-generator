@@ -9,6 +9,7 @@ from __future__ import division
 from __future__ import print_function
 
 import models.pose_resnet
+import models.feature_extractor
 from .yolo import YOLOv5
 
 __factory = {

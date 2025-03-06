@@ -1,7 +1,8 @@
 # ------------------------------------------------------------------------------
 # Copyright (c) Microsoft
 # Licensed under the MIT License.
-# Written by Bin Xiao (Bin.Xiao@microsoft.com)
+# Reference to Bin Xiao code (Bin.Xiao@microsoft.com)
+# Written by Jeongmin Kim
 # ------------------------------------------------------------------------------
 
 from __future__ import absolute_import
@@ -30,6 +31,7 @@ config.CUDNN.DETERMINISTIC = False
 config.CUDNN.ENABLED = True
 
 # pose_resnet related params
+# For Detecting Keypoints
 POSE_RESNET = edict()
 POSE_RESNET.NUM_LAYERS = 50
 POSE_RESNET.DECONV_WITH_BIAS = False
@@ -45,7 +47,7 @@ MODEL_EXTRAS = {
     'pose_resnet': POSE_RESNET,
 }
 
-# common params for NETWORK
+# common params for Joint Detector
 config.MODEL = edict()
 config.MODEL.NAME = 'pose_resnet'
 config.MODEL.INIT_WEIGHTS = True
@@ -59,7 +61,7 @@ config.MODEL.STYLE = 'pytorch'
 config.LOSS = edict()
 config.LOSS.USE_TARGET_WEIGHT = True
 
-# DATASET related params
+# DATASET(to Estimate Joint) related params
 config.DATASET = edict()
 config.DATASET.ROOT = ''
 config.DATASET.DATASET = 'mpii'
@@ -74,6 +76,12 @@ config.DATASET.FLIP_PAIR = [[1, 12],[2,13],[3,14],[4,10],[5,11],[6,9],[15,17]]
 config.DATASET.FLIP = False
 config.DATASET.SCALE_FACTOR = 0.25
 config.DATASET.ROT_FACTOR = 30
+
+
+config.DATASET.PKL = 'data/pkl/output.pkl'
+config.DATASET.USE_RAW = True
+config.DATASET.USE_PATCHE = True
+config.DATASET.TARGET_CLASSES = ['oa', 'normal']
 
 # train
 config.TRAIN = edict()

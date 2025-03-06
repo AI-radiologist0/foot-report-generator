@@ -9,6 +9,7 @@ from __future__ import division
 from __future__ import print_function
 
 import torch.nn as nn
+import torch
 
 
 class JointsMSELoss(nn.Module):
@@ -36,3 +37,18 @@ class JointsMSELoss(nn.Module):
                 loss += 0.5 * self.criterion(heatmap_pred, heatmap_gt)
 
         return loss / num_joints
+
+
+# ===========================================================
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.75, gamma=2):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.bce_loss = nn.BCELoss()
+
+    def forward(self, inputs, targets):
+        BCE_loss = self.bce_loss(inputs, targets)
+        pt = torch.exp(-BCE_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * BCE_loss
+        return focal_loss
