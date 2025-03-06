@@ -22,16 +22,23 @@ class FeatureExtractor(nn.Module):
 
         self.classifier = nn.Sequential(
             nn.Linear(self.global_feature_dim + self.local_feature_dim, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.4),
+            
             nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.4),
+            
             nn.Linear(256, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.Linear(64, 1),
+            
+            nn.Linear(64, 1), 
             nn.Sigmoid()
         )
+
 
     def forward(self, image, patches):
         # Extract global features (Swin Transformer)

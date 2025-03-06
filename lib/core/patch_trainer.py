@@ -83,7 +83,7 @@ class PatchTrainer:
         writer.add_scalar('train_accuracy', acc_meter.avg, global_steps - 1)
         logger.info(f'Epoch [{epoch}] - Training Acc : {train_acc:.4f} ')
         
-        return loss_meter.avg, acc_meter.avg
+        return loss_meter.avg, train_acc
     
     
     def validate(self, epoch, model, val_loader, writer_dict=None, criterion=None):
