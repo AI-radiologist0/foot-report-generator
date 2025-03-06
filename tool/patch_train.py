@@ -28,14 +28,14 @@ import torchvision.transforms as transforms
 
 
 import _init_path
-# from core.config import config
-# from core.config import update_config
-# from core.config import update_dir
 from config import cfg, update_config
 from core.patch_trainer import PatchTrainer
 from dataset.joint_patches import FootPatchesDataset
+from utils.utils import EarlyStopping, BestModelSaver
 
 import models
+
+torch.cuda.empty_cache()
 
 
 def parse_args():
@@ -148,27 +148,35 @@ def main():
     test_size = len(dataset) - train_size - val_size
     
     train_dataset, val_dataset, test_dataset = torchUtils.random_split(dataset, [train_size, val_size, test_size])
-    train_loader = torchUtils.DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = torchUtils.DataLoader(val_dataset, batch_size=32, shuffle=False)
-    test_loader = torchUtils.DataLoader(test_dataset, batch_size=32, shuffle=False)
+    train_loader = torchUtils.DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE_PER_GPU, shuffle=True)
+    val_loader = torchUtils.DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE_PER_GPU, shuffle=False)
+    test_loader = torchUtils.DataLoader(test_dataset, batch_size=cfg.TEST.BATCH_SIZE_PER_GPU, shuffle=False)
     
     # Train and Validation by Using Trainier
     logging.info('Prepare Trainer ...')
     trainer = PatchTrainer(cfg, model=model, output_dir=final_output_dir, writer_dict=writer_dict)
     optimizer = AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    early_stopping = EarlyStopping(verbose=True)
+    best_model_saver = BestModelSaver()
     
     logging.info("Start Training")
     for epoch in range(cfg.TRAIN.BEGIN_EPOCH, cfg.TRAIN.END_EPOCH):
         train_loss, train_acc = trainer.train(epoch, train_loader, optimizer=optimizer)
         val_perf, val_loss, precision, recall, f1 = trainer.validate(epoch, model, val_loader)
+        # early stopping
+        best_model_saver.save(model, val_loss)
+        early_stopping(val_loss=val_loss)
+        if early_stopping:
+            logging.info("Trigger Early Stopping!!!")
+            break
         
         # logging data (Wandb)
         wandb.log({"train_loss": train_loss, "train_acc": train_acc, "val_loss": val_loss, "val_performance": val_perf,
                        "precision": precision, "recall": recall, "f1_score": f1, "epoch": epoch}, step=epoch)
-        # early stopping
         
         
     # Test
+    model = best_model_saver.load_best_model(model).to(device).eval()
     test_perf, test_loss, precision, recall, f1 = trainer.validate(1, model, test_loader)
     run.log({"test_perf": test_perf, "test_loss": test_loss, 
                        "precision(test)": precision, "recall(test)": recall, "f1_score(test)": f1})

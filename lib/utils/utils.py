@@ -17,6 +17,7 @@ from pathlib import Path
 
 import torch
 import torch.optim as optim
+import wandb
 from tqdm import tqdm
 
 from core.config import get_model_name
@@ -158,7 +159,9 @@ class EarlyStopping:
                 print(f"EarlyStopping counter: {self.counter} out of {self.patience}")
             if self.counter >= self.patience:
                 self.early_stop = True
-                
+    def __bool__(self):
+        return self.early_stop
+        
                 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -176,3 +179,37 @@ class AverageMeter(object):
         self.sum = self.sum + val * n
         self.count = self.count + n
         self.avg = self.sum / self.count if self.count != 0 else 0
+        
+
+class BestModelSaver:
+    def __init__(self, save_path="best_model.pth", verbose=False):
+        """
+        Args:
+            save_path (str): 베스트 모델을 저장할 경로
+            verbose (bool): 모델 저장 시 출력 여부
+        """
+        self.save_path = os.path.join(wandb.run.dir, save_path)
+        self.best_loss = float("inf")  # 초기값은 무한대
+        self.verbose = verbose
+
+    def save(self, model, val_loss):
+        """
+        Args:
+            model (torch.nn.Module): 저장할 모델
+            val_loss (float): 현재 검증 손실
+        """
+        if val_loss < self.best_loss:
+            self.best_loss = val_loss
+            torch.save(model.state_dict(), self.save_path)
+            
+            # wandb.log({"Best Val Loss": val_loss})
+            
+            if self.verbose:
+                print(f"🔹 Best model saved! New best loss: {val_loss:.6f}")
+
+    def load_best_model(self, model):
+        """저장된 베스트 모델을 로드하는 메서드"""
+        model.load_state_dict(torch.load(self.save_path))
+        if self.verbose:
+            print(f"✅ Best model loaded from {self.save_path}")
+        return model
