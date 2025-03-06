@@ -132,7 +132,6 @@ dmypy.json
 checkpoint/
 logs/
 results/
-dataset/
 ckpt/
 
 # any zip file
