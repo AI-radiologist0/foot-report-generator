@@ -37,6 +37,8 @@ YOLOv5.PAN = True  # Use Path Aggregation Network
 YOLOv5.PT = './runs/detect/weights/best.pt'
 
 feature_extractor = CN(new_allowed=True)
+feature_extractor.RAW = 'swin-t'
+feature_extractor.PATCH = 'Resnet'
 
 MODEL_EXTRAS = {
     'VGG19': VGG19,

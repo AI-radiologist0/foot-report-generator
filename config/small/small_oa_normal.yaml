@@ -1,0 +1,64 @@
+CUDNN:
+  BENCHMARK: True
+  DETERMINISTIC: False
+  ENABLED: True
+DATASET:
+  AUGMENT: True
+  BASIC_TRANSFORM: True
+  BBOX_CROP_FLAG: False
+  DATA_FORMAT: jpg
+  INCLUDE_CLASSES: ['oa', 'normal']
+  JSON: data.json
+  MEAN: [0.1147, 0.1147, 0.1147]
+  PKL: data/pkl/output200x300_2423.pkl
+  ROOT: 
+  STD: [0.2194, 0.2194, 0.2194]
+  TARGET_CLASSES: ['oa', 'normal']
+  TEST_SET: valid
+  TRAIN_SET: train
+  USE_PATCH: True
+  USE_RAW: True
+DATA_DIR: 
+DEBUG:
+  DEBUG: False
+  GRAPH_DEBUG: True
+DEVICE: GPU
+GPUS: 0
+KFOLD:
+  KFOLD_SIZE: 5
+  P: 0
+  TEST_SET_RATIO: 0.15
+  USE_KFOLD: True
+LOG_DIR: 
+MODEL:
+  INIT_WEIGHTS: True
+  NAME: feature_extractor2
+  PRETRAINED: True
+OUTPUT_DIR: ./output/twobranchmodel
+PHASE: train
+PRINT_FREQ: 10
+TEST:
+  BATCH_SIZE_PER_GPU: 32
+  TEST_SET_RATIO: 0.15
+TRAIN:
+  BATCH_SIZE_PER_GPU: 64
+  BEGIN_EPOCH: 0
+  CHECKPOINT: 
+  DECAY: 0.0005
+  END_EPOCH: 25
+  GAMMA1: 0.99
+  GAMMA2: 0.0
+  LR: 0.001
+  LR_FACTOR: 0.1
+  LR_STEP: [90, 110]
+  MODE: min
+  MOMENTUM: 0.9
+  NESTEROV: False
+  OPTIMIZER: adam
+  PATIENCE: 5
+  RESUME: False
+  SCHEDULER: ReduceLROnPlateau
+  SHUFFLE: True
+  WD: 0.0001
+  factor: 0.5
+WORKERS: 4

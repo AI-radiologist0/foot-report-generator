@@ -97,8 +97,10 @@ def main():
     target_classes = cfg.DATASET.TARGET_CLASSES
     str_target_classes = '_'.join(target_classes)
     # two branch model 
-    # local = config.MODEL.LOCAL
-    # global = config.MODEL.GLOBAL
+    raw = cfg.MODEL.EXTRA.RAW
+    patch = cfg.MODEL.EXTRA.PATCH
+    model_name = cfg.MODEL.NAME
+    dataset_scale = 'large' if cfg.DATASET.PKL == 'data/pkl/output200x300.pkl' else 'small'
 
     # Set output directories
     final_output_dir = os.path.join('output', f"twobranchModel_{timestamp}_{str_target_classes}_classifier")
@@ -112,12 +114,21 @@ def main():
     logger.info(pprint.pformat(args))
     logger.info(pprint.pformat(cfg))
 
+    logger.info(
+        f"Timestamp: {timestamp}, "
+        f"Target Classes: {str_target_classes}, "
+        f"Model Name: {model_name}, "
+        f"Dataset Scale: {dataset_scale}, "
+        f"Raw Branch: {raw}, "
+        f"Patch Branch: {patch}"
+    )
+
     # cudnn related setting
     cudnn.benchmark = cfg.CUDNN.BENCHMARK
     torch.backends.cudnn.deterministic = cfg.CUDNN.DETERMINISTIC
     torch.backends.cudnn.enabled = cfg.CUDNN.ENABLED
 
-    model = eval('models.' + cfg.MODEL.NAME + '.get_feature_extractor')(
+    model = eval('models.' + model_name + '.get_feature_extractor')(
         cfg, is_train=True
     )
 
@@ -131,7 +142,7 @@ def main():
     run = wandb.init(
         project="classification(2branchModel)",
         config = dict(cfg),
-        name=f"twobranchModel_{timestamp}_{str_target_classes}_classifier",  # Include timestamp and cfg name in run name
+        name=f"twobranchModel_{model_name}_{dataset_scale}_{timestamp}_{str_target_classes}_classifier_raw_{raw}_patch_{patch}",  # Include timestamp and cfg name in run name
         notes="This run includes best_model and final_model logging to WandB.",  # Optional description
         tags=["hand-arthritis", "classification(test)"]  # Optional tags
     )

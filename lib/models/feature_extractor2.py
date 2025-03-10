@@ -5,99 +5,6 @@ import timm
 from torchvision import models
 import torch.nn.functional as F
 
-
-def create_swin_model(variant, pretrained):
-    model = timm.create_model(variant, pretrained=pretrained)
-    model.head = nn.Identity()
-    return model, model.num_features
-
-def create_resnet_model(pretrained, in_channels=3):
-    model = models.resnet50(pretrained=pretrained)
-    model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-    dim = model.fc.in_features
-    model.fc = nn.Identity()
-    return model, dim
-
-def get_model(cfg, pretrained=True):
-    raw_type = cfg.MODEL.EXTRA.RAW.lower()
-    patch_type = cfg.MODEL.EXTRA.PATCH.lower()
-
-    # RAW 모델 선택
-    if raw_type == 'swin-t':
-        global_model, global_dim = create_swin_model('swin_tiny_patch4_window7_224', pretrained)
-    elif raw_type == 'resnet':
-        global_model, global_dim = create_resnet_model(pretrained, in_channels=102)
-    else:
-        raise ValueError(f"Unsupported RAW model type: {raw_type}")
-
-    # PATCH 모델 선택
-    if patch_type == 'swin-t':
-        local_model, local_dim = create_swin_model('swin_tiny_patch4_window7_224', pretrained)
-    elif patch_type == 'resnet':
-        local_model, local_dim = create_resnet_model(pretrained, in_channels=102)
-    else:
-        raise ValueError(f"Unsupported PATCH model type: {patch_type}")
-
-    return global_dim, global_model, local_dim, local_model
-
-class FeatureExtractor(nn.Module):
-    def __init__(self, cfg ,pretrained=True, **kwarg):
-        super(FeatureExtractor, self).__init__()
-
-        # self.global_branch = create_model('swin_tiny_patch4_window7_224', pretrained=pretrained)
-        # self.global_branch.head = nn.Identity()
-        # self.global_feature_dim = self.global_branch.num_features
-
-        self.global_feature_dim, self.global_branch, self.local_feature_dim, self.local_branch = get_model(cfg, pretrained=pretrained)
-
-        # resnet = models.resnet50(pretrained=pretrained)
-        # self.local_feature_dim = resnet.fc.in_features
-        # resnet.conv1 = nn.Conv2d(102, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        # resnet.fc = nn.Identity()
-        # self.local_branch = resnet
-        logging.info(f"local: {self.local_feature_dim}, global: {self.global_feature_dim}")
-
-        self.classifier = nn.Sequential(
-            nn.Linear(self.global_feature_dim + self.local_feature_dim, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.Dropout(0.4),
-            
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(0.4),
-            
-            nn.Linear(256, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            
-            nn.Linear(64, 1), 
-            nn.Sigmoid()
-        )
-
-
-    def forward(self, image, patches):
-        # Extract global features (Swin Transformer)
-        global_features = self.global_branch.forward_features(image)
-        # logging.info(f"{global_features.size()}")
-        if global_features.dim() == 4:  # Expected format: (batch, height, width, channel)
-            global_features = global_features.mean(dim=[1, 2])  # Perform mean pooling
-        elif global_features.dim() == 3:  # Expected format: (batch, num_tokens, channels)
-            global_features = global_features.mean(dim=1)  # Pool over tokens -> (32, 7)
-
-        # Extract local features (ResNet for patches)
-        local_features = self.local_branch(patches)
-        local_features = local_features.view(local_features.size(0), -1)  # Flatten
-
-        # logging.info(f"{global_features.size()}, {local_features.size()}")
-
-        # **Ensure both feature tensors have same batch dimension**
-        combined_features = torch.cat((global_features, local_features), dim=1)
-
-        return self.classifier(combined_features)
-
-
 class TwoBranchModel(nn.Module):
     def __init__(self, pretrained=True):
         super(TwoBranchModel, self).__init__()
@@ -183,7 +90,7 @@ class TwoBranchModel(nn.Module):
 
 
 def get_feature_extractor(cfg, is_train, **kwargs):
-    model = FeatureExtractor(cfg)
+    model = TwoBranchModel(pretrained=True)
     if is_train:
         model.train()
     else:
