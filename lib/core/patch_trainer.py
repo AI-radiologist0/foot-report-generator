@@ -12,25 +12,37 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 from utils.utils import AverageMeter
+from core.loss import FocalLoss
 from collections import Counter
 from sklearn.metrics import precision_score, recall_score, f1_score, roc_curve, auc
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from tqdm import tqdm
+from sklearn.metrics import precision_score, recall_score, f1_score
+import logging
+import time
+
 class PatchTrainer:
     def __init__(self, cfg, model, output_dir, writer_dict):
         self.device = 'cuda' if cfg.DEVICE == "GPU" else 'cpu'
-        self.model = model
-        self.output_dir = output_dir  # cfg로 설정
+        self.model = model.to(self.device)
+        self.output_dir = output_dir
         self.print_freq = cfg.PRINT_FREQ
         self.writer_dict = writer_dict
-        self.val_loss = None
-        self.val_accuracy = None
         self.scheduler = cfg.TRAIN.SCHEDULER
-        self.criterion = nn.BCELoss()
+        self.target_classes = cfg.DATASET.TARGET_CLASSES
+        self.is_binary = len(self.target_classes) == 2
 
+        # 🔹 Loss 자동 적용 (BCE vs Focal Loss)
+        if cfg.TRAIN.LOSS == 'BCELoss':
+            self.criterion = nn.BCELoss()
+        elif cfg.TRAIN.LOSS == 'FocalLoss':
+            self.criterion = FocalLoss(cfg)
 
     def train(self, epoch, data_loader, optimizer, scheduler=None):
-        # logger
         logger = logging.getLogger("Training")
         batch_time = AverageMeter()
         data_time = AverageMeter()
@@ -38,32 +50,42 @@ class PatchTrainer:
         acc_meter = AverageMeter()
 
         correct, total = 0, 0
-        
-        criterion = nn.BCELoss()
+        criterion = self.criterion
         self.model.train()
-
         end = time.time()
 
-        for i, (images, patches, labels )in enumerate(data_loader):
-
+        for i, (images, patches, labels) in enumerate(data_loader):
             data_time.update(time.time() - end)
-            images, patches, labels = images.to(self.device), patches.to(self.device), labels.float().to(self.device).unsqueeze(1)
-          
-            outputs = self.model(images, patches)
+            images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
+
+            # 🔹 이진 분류(BCE) vs 다중 분류(CE) 적용
+            if self.is_binary:
+                labels = labels.float() # BCE Loss 적용을 위해 차원 확장
+                outputs = self.model(images, patches)
+            else:
+                labels = labels.long()
+                outputs = self.model(images, patches)  # 다중 분류에서는 Softmax 미적용 (CrossEntropy Loss가 내부적으로 적용)
+
             loss = criterion(outputs, labels)
-            
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
+
             loss_meter.update(loss.item(), images.size(0))
             batch_time.update(time.time() - end)
             end = time.time()
-            
-            correct += ((outputs > 0.5).float() == labels).sum().item()
+
+            # 🔹 정확도 계산 (이진 분류 & 다중 분류)
+            if self.is_binary:
+                preds = (outputs > 0.5).float()  # BCE에서는 0.5 기준으로 분류
+            else:
+                preds = torch.argmax(outputs, dim=1)  # 다중 분류에서는 argmax 사용
+
+            correct += (preds == labels).sum().item()
             total += labels.size(0)
 
-            # logger -----)
+            # 로그 출력
             if i % self.print_freq == 0:
                 msg = f'Epoch: [{epoch}] [{i}/{len(data_loader)}] \t ' \
                       f'Time: {batch_time.val:.3f}s ({batch_time.avg:.3f}s) \t' \
@@ -71,66 +93,70 @@ class PatchTrainer:
                       f'Loss: {loss_meter.val:.4f} ({loss_meter.avg:.4f})'
                 logger.info(msg)
 
-                # logger.info(f"Current learning rate: {optimizer.param_groups[0]['lr']}")
-
             writer = self.writer_dict['writer']
             global_steps = self.writer_dict['train_global_steps']
             writer.add_scalar('train_loss', loss_meter.val, global_steps)
             self.writer_dict['train_global_steps'] = global_steps + 1
-            
+
         train_acc = correct / total
         acc_meter.update(correct, total)
         writer.add_scalar('train_accuracy', acc_meter.avg, global_steps - 1)
         logger.info(f'Epoch [{epoch}] - Training Acc : {train_acc:.4f} ')
-        
+
         return loss_meter.avg, train_acc
-    
-    
+
     def validate(self, epoch, model, val_loader, writer_dict=None, criterion=None):
         logger = logging.getLogger("Validation")
-        model.eval()  # 모델을 평가 모드로 설정
+        model.eval()
 
         if not criterion:
             criterion = self.criterion
 
-
-        losses = AverageMeter()  # 손실 추적
-        accuracies = AverageMeter()  # 정확도 추적
-
+        losses = AverageMeter()
+        accuracies = AverageMeter()
         all_preds = []
         all_labels = []
-        all_probs = []  # 확률값 저장 (ROC 곡선 용도)
+        all_probs = []
 
         with torch.no_grad():
-            end = time.time()
             for images, patches, labels in tqdm(val_loader):
-                # 데이터 로드 및 디바이스로 이동
-                images, patches, labels = images.to(self.device), patches.to(self.device), labels.float().to(self.device).unsqueeze(1)
+                images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
 
-                # 모델 예측
-                outputs = model(images, patches)
+                # 🔹 이진 분류(BCE) vs 다중 분류(CE) 적용
+                if self.is_binary:
+                    labels = labels.float()  # BCE Loss 적용을 위해 차원 확장
+                    outputs = model(images, patches)  # Sigmoid 적용
+                else:
+                    labels = labels.long()
+                    outputs = model(images, patches)  # Softmax 미적용 (CrossEntropy Loss 내부적으로 적용)
+
                 loss = criterion(outputs, labels)
-
-                # 손실 업데이트
                 losses.update(loss.item(), images.size(0))
 
-                preds = (outputs > 0.5).float()
+                # 🔹 정확도 계산 (이진 분류 & 다중 분류)
+                if self.is_binary:
+                    preds = (outputs > 0.5).float()  # BCE에서는 0.5 기준으로 분류
+                else:
+                    preds = torch.argmax(outputs, dim=1)  # 다중 분류에서는 argmax 사용
 
-                # 정확도 계산 및 업데이트
                 correct = (preds == labels).sum().item()
                 total = labels.size(0)
                 accuracy = correct / total
                 accuracies.update(accuracy, total)
 
-                # 예측 및 실제 값 저장
                 all_probs.extend(outputs.cpu().numpy())
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
 
-        # Precision, Recall, F1 Score 계산 (이진 분류)
-        precision = precision_score(all_labels, all_preds, average='binary', zero_division=0)
-        recall = recall_score(all_labels, all_preds, average='binary', zero_division=0)
-        f1 = f1_score(all_labels, all_preds, average='binary', zero_division=0)
+        # 🔹 Precision, Recall, F1 Score 계산
+        if self.is_binary:
+            precision = precision_score(all_labels, all_preds, average='binary', zero_division=0)
+            recall = recall_score(all_labels, all_preds, average='binary', zero_division=0)
+            f1 = f1_score(all_labels, all_preds, average='binary', zero_division=0)
+        else:
+            precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+            recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+            f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 
         # TensorBoard 기록
         if writer_dict:

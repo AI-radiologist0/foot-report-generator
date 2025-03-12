@@ -44,17 +44,19 @@ class FeatureExtractor(nn.Module):
     def __init__(self, cfg ,pretrained=True, **kwarg):
         super(FeatureExtractor, self).__init__()
 
-        # self.global_branch = create_model('swin_tiny_patch4_window7_224', pretrained=pretrained)
-        # self.global_branch.head = nn.Identity()
-        # self.global_feature_dim = self.global_branch.num_features
+        self.target_classes = cfg.DATASET.TARGET_CLASSES
+        self.is_binary = len(self.target_classes) == 2
+        self.output_dim = 1 if self.is_binary else len(self.target_classes)
 
         self.global_feature_dim, self.global_branch, self.local_feature_dim, self.local_branch = get_model(cfg, pretrained=pretrained)
 
-        # resnet = models.resnet50(pretrained=pretrained)
-        # self.local_feature_dim = resnet.fc.in_features
-        # resnet.conv1 = nn.Conv2d(102, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        # resnet.fc = nn.Identity()
-        # self.local_branch = resnet
+        # Validation checks
+        assert isinstance(self.global_feature_dim, int), "Global feature dimension must be an integer"
+        assert isinstance(self.local_feature_dim, int), "Local feature dimension must be an integer"
+        assert isinstance(self.global_branch, nn.Module), "Global branch must be a PyTorch module"
+        assert isinstance(self.local_branch, nn.Module), "Local branch must be a PyTorch module"
+
+
         logging.info(f"local: {self.local_feature_dim}, global: {self.global_feature_dim}")
 
         self.classifier = nn.Sequential(
@@ -72,8 +74,7 @@ class FeatureExtractor(nn.Module):
             nn.BatchNorm1d(64),
             nn.ReLU(),
             
-            nn.Linear(64, 1), 
-            nn.Sigmoid()
+            nn.Linear(64, self.output_dim)
         )
 
 
@@ -85,6 +86,8 @@ class FeatureExtractor(nn.Module):
             global_features = global_features.mean(dim=[1, 2])  # Perform mean pooling
         elif global_features.dim() == 3:  # Expected format: (batch, num_tokens, channels)
             global_features = global_features.mean(dim=1)  # Pool over tokens -> (32, 7)
+        else:
+            raise ValueError(f"Unexpected feature dimension: {global_features.shape}")
 
         # Extract local features (ResNet for patches)
         local_features = self.local_branch(patches)
@@ -95,6 +98,9 @@ class FeatureExtractor(nn.Module):
         # **Ensure both feature tensors have same batch dimension**
         combined_features = torch.cat((global_features, local_features), dim=1)
 
+        if self.is_binary:
+            return torch.sigmoid(self.classifier(combined_features))
+        
         return self.classifier(combined_features)
 
 

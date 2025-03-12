@@ -42,7 +42,7 @@ def merge_keypoints_with_annotations(bbox_json_path, keypoints_json_path, diseas
         image_id = ann["image_id"]
         if image_id in image_id_map:
             ann["image_id"] = image_id_map[image_id]
-            ann["bbox_annotation_id"] = bbox_annotation_id_counter
+            ann["bbox_id"] = bbox_annotation_id_counter
             bbox_annotation_id_counter += 1
             if "detected_text" in ann and ann["detected_text"] in ["R", "L"]:
                 bbox_annotations[image_id].append(ann)
@@ -52,7 +52,7 @@ def merge_keypoints_with_annotations(bbox_json_path, keypoints_json_path, diseas
         original_id = keypoint["image_id"]
         if original_id in image_id_map:
             keypoint["image_id"] = image_id_map[original_id]
-            keypoint["keypoint_annotation_id"] = keypoint_annotation_id_counter
+            keypoint["keypoint_id"] = keypoint_annotation_id_counter
             keypoint_annotation_id_counter += 1
             keypoint_annotations[image_id_map[original_id]].append(keypoint)
     
@@ -67,7 +67,7 @@ def merge_keypoints_with_annotations(bbox_json_path, keypoints_json_path, diseas
         disease_class = disease_entry.get("class")
         diagnosis = disease_entry.get("diagnosis")
         
-        associated_bbox_annotations = [ann["bbox_annotation_id"] for ann in bbox_annotations[image_id]]
+        associated_bbox_annotations = [ann["bbox_id"] for ann in bbox_annotations[image_id]]
         sorted_k_ann = sorted(keypoint_annotations[image_id], key=lambda k: k["center"][0])
         
         left_keypoint, right_keypoint = [], []
@@ -97,17 +97,17 @@ def merge_keypoints_with_annotations(bbox_json_path, keypoints_json_path, diseas
             "image_id": image_id,
             "patient_id": patient_id,
             "file_path": file_path,
-            "class": disease_class,
+            "class_label": disease_class,
             "diagnosis": diagnosis,
-            "bbox_annotation_ids": associated_bbox_annotations,
-            "keypoint_annotation_ids": {"left": left_keypoint, "right": right_keypoint}
+            "bbox_id_list": associated_bbox_annotations,
+            "keypoint_id_list": {"left": left_keypoint, "right": right_keypoint}
         })
     
     output_data = {
         "images": bbox_data["images"],
-        "bbox_annotations": list(bbox_annotations.values()),
-        "keypoint_annotations": list(keypoint_annotations.values()),
-        "disease": disease_list,
+        "bboxes": list(bbox_annotations.values()),
+        "keypoints": list(keypoint_annotations.values()),
+        "diseases": disease_list,
         "meta": disease_data.get("meta", {})
     }
     
@@ -123,5 +123,5 @@ if __name__ == "__main__":
     bbox_json_path = "data/json/joint/ocr_results_new.json"
     keypoints_json_path = "output/coco/pose_resnet_50/384x288_d256x3_adam_lr1e-3-RHPE-Foot-N3-Doctor-noflip-cau-newformat-one-val/results/keypoints_JPEGImages_results.json"
     disease_json_path = "data/json/foot_merge.json"
-    output_json_path = "data/json/merge/final_merge_output.json"
+    output_json_path = "data/json/merge/final_merge_output_v2.json"
     merge_keypoints_with_annotations(bbox_json_path, keypoints_json_path, disease_json_path, output_json_path)
