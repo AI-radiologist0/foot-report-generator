@@ -11,6 +11,7 @@ from __future__ import print_function
 import models.pose_resnet
 import models.feature_extractor
 import models.feature_extractor2
+import models.decoder
 from .yolo import YOLOv5
 
 __factory = {

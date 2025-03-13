@@ -12,6 +12,8 @@ import os
 
 from yacs.config import CfgNode as CN
 from .model_cfg import MODEL_EXTRAS
+# # If you want to save yaml file, use below code 
+# from model_cfg import MODEL_EXTRAS
 
 _C = CN()
 
@@ -31,12 +33,19 @@ _C.CUDNN.BENCHMARK = True
 _C.CUDNN.DETERMINISTIC = False
 _C.CUDNN.ENABLED = True
 
-# common params for NETWORK
+# common params for NETWORK (Feature Extractor)
 _C.MODEL = CN()
 _C.MODEL.NAME = 'feature_extractor'
 _C.MODEL.EXTRA = MODEL_EXTRAS[_C.MODEL.NAME]
 _C.MODEL.INIT_WEIGHTS = True
 _C.MODEL.PRETRAINED = True
+
+# Params for Decoder (GPT2)
+_C.DECODER = CN()
+_C.DECODER.NAME = 'GPT2'
+_C.DECODER.EXTRA = MODEL_EXTRAS[_C.DECODER.NAME]
+_C.DECODER.INIT_WEIGHTS = True
+_C.DECODER.PRETRAINED = True
 
 # if you want to add new params for NETWORK, Init new Params below!
 
@@ -60,6 +69,7 @@ _C.DATASET.TARGET_CLASSES = ['oa', 'normal']
 _C.DATASET.PKL = 'data/pkl/output.pkl'
 _C.DATASET.USE_RAW = True
 _C.DATASET.USE_PATCH = True
+_C.DATASET.REPORT = False
 
 
 # Related Train Parameter

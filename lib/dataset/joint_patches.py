@@ -137,6 +137,7 @@ class FootPatchesDataset(Dataset):
         self.use_raw = config.DATASET.USE_RAW
         self.use_patches = config.DATASET.USE_PATCH
         self.target_classes = config.DATASET.TARGET_CLASSES
+        self.use_report = config.DATASET.REPORT
 
         if isinstance(self.target_classes, str):
             self.target_classes = self.target_classes.split(",")
@@ -168,6 +169,7 @@ class FootPatchesDataset(Dataset):
         file_path = entry['file_path']
         label = self.target_classes.index(entry['class'].lower())  # 정수형 라벨 변환
         patches = entry.get("bbx", [])  # 패치 정보 가져오기
+        report = entry.get("diagnosis", None)  # 보고서 정보 가져오기
 
         # **Lazy Load: 원본 이미지 로드**
         image = Image.open(file_path).convert("RGB")
@@ -194,4 +196,6 @@ class FootPatchesDataset(Dataset):
         else:
             label = torch.tensor(label, dtype=torch.long)  # CrossEntropy Loss 기반 Focal Loss
 
+        if self.use_report:
+            return image, patch_tensor, label, report
         return image, patch_tensor, label

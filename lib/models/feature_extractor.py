@@ -41,7 +41,7 @@ def get_model(cfg, pretrained=True):
     return global_dim, global_model, local_dim, local_model
 
 class FeatureExtractor(nn.Module):
-    def __init__(self, cfg ,pretrained=True, **kwarg):
+    def __init__(self, cfg, pretrained=True, **kwarg):
         super(FeatureExtractor, self).__init__()
 
         self.target_classes = cfg.DATASET.TARGET_CLASSES
@@ -56,8 +56,9 @@ class FeatureExtractor(nn.Module):
         assert isinstance(self.global_branch, nn.Module), "Global branch must be a PyTorch module"
         assert isinstance(self.local_branch, nn.Module), "Local branch must be a PyTorch module"
 
-
         logging.info(f"local: {self.local_feature_dim}, global: {self.global_feature_dim}")
+        
+            
 
         self.classifier = nn.Sequential(
             nn.Linear(self.global_feature_dim + self.local_feature_dim, 512),
@@ -76,16 +77,18 @@ class FeatureExtractor(nn.Module):
             
             nn.Linear(64, self.output_dim)
         )
-
+        if cfg.MODEL.EXTRA.USE_CKPT and cfg.MODEL.EXTRA.CKPT:
+            logging.info(f"feature extractor load ckpt flag: {cfg.MODEL.EXTRA.USE_CKPT}")
+            self.load_from_checkpoint(cfg.MODEL.EXTRA.CKPT)
+            
 
     def forward(self, image, patches):
         # Extract global features (Swin Transformer)
         global_features = self.global_branch.forward_features(image)
-        # logging.info(f"{global_features.size()}")
         if global_features.dim() == 4:  # Expected format: (batch, height, width, channel)
             global_features = global_features.mean(dim=[1, 2])  # Perform mean pooling
         elif global_features.dim() == 3:  # Expected format: (batch, num_tokens, channels)
-            global_features = global_features.mean(dim=1)  # Pool over tokens -> (32, 7)
+            global_features = global_features.mean(dim=1)  # Pool over tokens
         else:
             raise ValueError(f"Unexpected feature dimension: {global_features.shape}")
 
@@ -93,15 +96,28 @@ class FeatureExtractor(nn.Module):
         local_features = self.local_branch(patches)
         local_features = local_features.view(local_features.size(0), -1)  # Flatten
 
-        # logging.info(f"{global_features.size()}, {local_features.size()}")
-
-        # **Ensure both feature tensors have same batch dimension**
+        # Ensure both feature tensors have the same batch dimension
         combined_features = torch.cat((global_features, local_features), dim=1)
+        
+        if self.classifier is None:
+            return combined_features
 
         if self.is_binary:
             return torch.sigmoid(self.classifier(combined_features))
         
         return self.classifier(combined_features)
+
+    def load_from_checkpoint(self, checkpoint_path, map_location=None):
+        """
+        Load model weights from a checkpoint.
+
+        Args:
+            checkpoint_path (str): Path to the .pth file.
+            map_location (str or torch.device, optional): Device to map the checkpoint. Defaults to None.
+        """
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+        self.load_state_dict(checkpoint)
+        logging.info(f"Model weights loaded from {checkpoint_path}")
 
 
 class TwoBranchModel(nn.Module):
@@ -188,10 +204,28 @@ class TwoBranchModel(nn.Module):
 
 
 
-def get_feature_extractor(cfg, is_train, **kwargs):
+def get_feature_extractor(cfg, is_train, remove_classifier=False, **kwargs):
+    """
+    Initialize the feature extractor model.
+
+    Args:
+        cfg: Configuration object.
+        is_train: Boolean indicating whether the model is in training mode.
+        remove_classifier: Boolean indicating whether to remove the classifier layer.
+        **kwargs: Additional arguments.
+
+    Returns:
+        Feature extractor model.
+    """
     model = FeatureExtractor(cfg)
+    
+    # Optionally remove the classifier
+    if remove_classifier and hasattr(model, 'classifier'):
+        model.classifier = None  # Remove the classifier layer
+    
     if is_train:
         model.train()
     else:
         model.eval()
+    
     return model
