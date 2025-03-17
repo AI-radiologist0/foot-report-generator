@@ -1,7 +1,6 @@
 # ------------------------------------------------------------------------------
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
-# Written by Bin Xiao (Bin.Xiao@microsoft.com)
+# # Licensed under the MIT License.
+# Written by Jeongmin Kim (jm.kim@dankook.ac.kr)
 # ------------------------------------------------------------------------------
 
 

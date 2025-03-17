@@ -138,11 +138,13 @@ def main():
                    "train_global_steps": 0,
                    "valid_global_steps": 0}
     
+    branch_type = "4branchModel" if model_name == 'feature_extractor2' else "2branchModel"
+
     # Wandb Init
     run = wandb.init(
-        project="classification(2branchModel)",
+        project=f"classification({branch_type})",
         config = dict(cfg),
-        name=f"twobranchModel_{model_name}_{dataset_scale}_{timestamp}_{str_target_classes}_classifier_raw_{raw}_patch_{patch}",  # Include timestamp and cfg name in run name
+        name=f"{branch_type}_{model_name}_{dataset_scale}_{timestamp}_{str_target_classes}_classifier_raw_{raw}_patch_{patch}",  # Include timestamp and cfg name in run name
         notes="This run includes best_model and final_model logging to WandB.",  # Optional description
         tags=["hand-arthritis", "classification(test)"]  # Optional tags
     )
@@ -168,7 +170,7 @@ def main():
     trainer = PatchTrainer(cfg, model=model, output_dir=final_output_dir, writer_dict=writer_dict)
     optimizer = AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
     early_stopping = EarlyStopping(verbose=True)
-    best_model_saver = BestModelSaver()
+    best_model_saver = BestModelSaver(verbose=True)
     
     logging.info("Start Training")
     for epoch in range(cfg.TRAIN.BEGIN_EPOCH, cfg.TRAIN.END_EPOCH):

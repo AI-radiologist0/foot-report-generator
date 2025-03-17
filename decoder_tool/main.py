@@ -16,7 +16,7 @@ from config import cfg, update_config
 from dataset.joint_patches import FootPatchesDataset
 from utils.collate_fn import TokenizedReportCollateFn
 from utils.utils import EarlyStopping, BestModelSaver, get_optimizer
-from core.decoder_trainer import DecoderTrainer
+from core.decoder_trainer import DecoderTrainer, clean_special_tokens
 
 import models
 from models.decoder import get_decoder_with_image_embedding, DecoderWithLoRA
@@ -94,15 +94,22 @@ def generate_texts(model, tokenizer, dataloader, device, feature_extractor):
             outputs = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                max_length=50,
-                image_embeddings=image_embeddings  # Pass image embeddings to the model
+                max_length=150,
+                image_embeddings=image_embeddings,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,  # Ensure EOS token is used
+                early_stopping=True  # Stop generation when EOS token is encountered
             )
 
             # Decode generated texts
-            generated_texts.extend([tokenizer.decode(output, skip_special_tokens=True) for output in outputs])
+            raw_generated_texts = [tokenizer.decode(output, skip_special_tokens=False) for output in outputs]
+            processed_generated_texts = [clean_special_tokens(text) for text in raw_generated_texts]
+            generated_texts.extend(processed_generated_texts)
 
             # Decode reference texts
-            reference_texts.extend([tokenizer.decode(label, skip_special_tokens=True) for label in batch["labels"]])
+            raw_reference_texts = [tokenizer.decode(label, skip_special_tokens=False) for label in batch["labels"]]
+            processed_reference_texts = [clean_special_tokens(text) for text in raw_reference_texts]
+            reference_texts.extend(processed_reference_texts)
 
     return generated_texts, reference_texts
 
@@ -149,11 +156,25 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(decoder_huggingface_name)
     logger.info("GPT-2 Tokenizer loaded.")
 
-    # Add a padding token if it doesn't exist
+    # Tokenizer setup
     if tokenizer.pad_token is None:
         tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         logger.info("Added [PAD] token as the pad_token to the tokenizer.")
     
+
+    if tokenizer.eos_token != "[EOS]":
+        tokenizer.add_special_tokens({'eos_token': "[EOS]"})
+        logger.info("Added [EOS] token as the eos_token to the tokenizer.")
+    
+    if tokenizer.bos_token != "[BOS]":
+        tokenizer.add_special_tokens({'bos_token': '[BOS]'})
+        logger.info("Added [BOS] token as the bos_token to the tokenizer.")
+    
+    special_tokens_dict = {
+            "additional_special_tokens": ["[FINDING]", "[CONCLUSION]", "[RECOMMEND]"]
+        }
+    tokenizer.add_special_tokens(special_tokens_dict)
+
     tokenizer.padding_side = "left"
 
     # Load dataset
@@ -161,7 +182,15 @@ def main():
         pkl_data = pickle.load(f)
 
     dataset = FootPatchesDataset(cfg, pkl_data)
-    collate_fn = TokenizedReportCollateFn(tokenizer, max_length=cfg.DECODER.EXTRA.MAX_SEQ_LENGTH)
+    collate_fn = TokenizedReportCollateFn(tokenizer, max_length=cfg.DECODER.EXTRA.MAX_SEQ_LENGTH, save_path='./token.txt')
+
+    # Logging Special Token IDs.
+    logger.info(f"Special Tokens: {tokenizer.special_tokens_map}")
+    logger.info(f"BOS Token: {tokenizer.bos_token} (ID: {tokenizer.bos_token_id})")
+    logger.info(f"EOS Token: {tokenizer.eos_token} (ID: {tokenizer.eos_token_id})")
+    logger.info(f"PAD Token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
+    logger.info(f"Additional Special Tokens: {tokenizer.additional_special_tokens}")
+    logger.info(f"Additional Special Token IDs: {tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens)}")
 
     # Split dataset into train, validation, and test sets
     train_size = int(0.7 * len(dataset))
@@ -204,6 +233,22 @@ def main():
     decoder_model.resize_token_embeddings(len(tokenizer))
     logger.info("Resized model embeddings to accommodate new tokens.")
 
+    # Log PAD Token ID
+    logger.info(f"Decoder Model PAD Token ID: {decoder_model.config.pad_token_id}")
+    decoder_model.config.pad_token_id = tokenizer.pad_token_id
+    logger.info(f"Decoder Model Updated PAD Token ID: {decoder_model.config.pad_token_id}")
+
+    decoder_model.config.eos_token_id = tokenizer.eos_token_id
+    logger.info(f"Set Decoder Model EOS Token ID to: {decoder_model.config.eos_token_id}")
+    
+    # Log BOS Token ID
+    decoder_model.config.bos_token_id = tokenizer.bos_token_id
+    logger.info(f"Set Decoder Model BOS Token ID to: {decoder_model.config.bos_token_id}")
+
+    logger.info(f"Tokenizer PAD Token ID: {tokenizer.pad_token_id}, Model PAD Token ID: {decoder_model.config.pad_token_id}")
+    logger.info(f"Tokenizer EOS Token ID: {tokenizer.eos_token_id}, Model EOS Token ID: {decoder_model.config.eos_token_id}")
+    logger.info(f"Tokenizer BOS Token ID: {tokenizer.bos_token_id}, Model BOS Token ID: {decoder_model.config.bos_token_id}")
+   
     # Apply LoRA to the decoder model
     logger.info("Applying LoRA to the decoder model...")
     lora_wrapped_model = get_peft_model(decoder_model, lora_config)
@@ -222,27 +267,49 @@ def main():
     early_stopping = EarlyStopping(verbose=True)
     best_model_saver = BestModelSaver(verbose=True)
     
-    # Training loop
-    for epoch in range(cfg.TRAIN.BEGIN_EPOCH, cfg.TRAIN.END_EPOCH):
-        logger.info(f"Epoch {epoch} starting...")
-               
-        train_loss = trainer.train(epoch, train_loader, optimizer)
-        val_loss, val_avg_bleu_score = trainer.validate(epoch, val_loader)
+    # When cfg.PHASE == 'train', train the model
+    if cfg.PHASE == 'train':
+        # Training loop
+        for epoch in range(cfg.TRAIN.BEGIN_EPOCH, cfg.TRAIN.END_EPOCH):
+            logger.info(f"Epoch {epoch} starting...")
+                
+            train_loss = trainer.train(epoch, train_loader, optimizer)
+            val_loss, val_avg_bleu_score, sample_predictions = trainer.validate(epoch, val_loader)
 
-        logger.info(f"Epoch {epoch}: Train Loss = {train_loss:.4f}, Validation Loss = {val_loss:.4f}")
-        wandb.log({"train_loss": train_loss, "val_loss": val_loss, "val_bleu": val_avg_bleu_score})
+            if sample_predictions:
+                columns = ["sample_id", "reference", "prediction", "bleu_score"]
+                data = []
+                for i, sample in enumerate(sample_predictions):
+                    data.append([i, sample['reference'], sample['prediction'], sample['bleu_score']])
+                
+                wandb.log({"sample_predictions": wandb.Table(columns=columns, data=data)})
 
-        best_model_saver.save(decoder_model, val_loss)
-        early_stopping(val_loss)
+            logger.info(f"Epoch {epoch}: Train Loss = {train_loss:.4f}, Validation Loss = {val_loss:.4f}")
+            wandb.log({"train_loss": train_loss, "val_loss": val_loss, "val_bleu": val_avg_bleu_score})
 
-        if early_stopping:
-            logger.info("Early stopping triggered.")
-            break
+            best_model_saver.save(decoder_model, val_loss)
+            early_stopping(val_loss)
 
-    # Generate texts and calculate BLEU score for test set
-    test_generated, test_references = generate_texts(decoder_model, tokenizer, test_loader, device)
-    test_bleu_score = calculate_bleu_score(test_references, test_generated)
-    logger.info(f"Test BLEU Score = {test_bleu_score:.4f}")
+            if early_stopping:
+                logger.info("Early stopping triggered.")
+                break
+
+    # Test the model on the test set when cfg.PHASE == 'test' or cfg.PHASE == 'train'
+    if cfg.PHASE == 'test' or cfg.PHASE == 'train':
+
+        saved_path = cfg.DECODER.EXTRA.PT if cfg.PHASE == 'test' else best_model_saver.save_path
+        
+        # Load the best model
+        best_model = best_model_saver.load_best_model(decoder_model, saved_path)
+        best_model.eval()
+        best_model.to(device)
+        logger.info("Best model loaded.")
+        
+
+        # Generate texts and calculate BLEU score for test set
+        test_generated, test_references = generate_texts(decoder_model, tokenizer, test_loader, device, feature_extractor)
+        test_bleu_score = calculate_bleu_score(test_references, test_generated)
+        logger.info(f"Test BLEU Score = {test_bleu_score:.4f}")
 
     # Finish Wandb run
     run.finish()

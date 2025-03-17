@@ -8,17 +8,15 @@ from tqdm import tqdm
 from bs4 import BeautifulSoup
 from wordcloud import WordCloud
 from collections import defaultdict
-import pickle 
 
 import _init_path
 from config import cfg, update_config
 
-
 # Data loading code
-with open(cfg.DATASET.PKL, 'rb') as f:
+with open('data/pkl/output200x300.pkl', 'rb') as f:
     data = pickle.load(f)
 
-report_pkl_path = os.path.join(os.path.dirname(cfg.DATASET.PKL), 'output_report.pkl')
+report_pkl_path = os.path.join(os.path.dirname('data/pkl/output200x300.pkl'), 'cleaned_report_for_decoder_train.pkl')
 print(report_pkl_path)
 
 # check the number of report
@@ -33,6 +31,7 @@ recommendation_pattern = None
 
 report_info = defaultdict(dict)
 
+
 def clean_text(text):
     if text:
         text = re.sub(r'[\W]?x000D[\W]?', ' ', text)  # 'x000D'와 주변 특수문자 제거
@@ -41,13 +40,12 @@ def clean_text(text):
         text = re.sub(r'\s+', ' ', text).strip()  # 연속된 공백 제거 및 앞뒤 공백 제거
     return text
 
-# diganosis (pkl_data["diagnosis"])
+# diagnosis (pkl_data["diagnosis"])
 for id, value in tqdm(data.items()):
-    # print(f"Working::{id}")
     sections = {
-        'finding' : None,
-        'conclusion' : None,
-        'recommend' : None,
+        'finding': None,
+        'conclusion': None,
+        'recommend': None,
     }
 
     image_path = data[id]['file_path']
@@ -70,7 +68,7 @@ for id, value in tqdm(data.items()):
     finding_match = re.search(finding_pattern, report, re.IGNORECASE | re.DOTALL)
     conclusion_match = re.search(conclusion_pattern, report, re.IGNORECASE | re.DOTALL)
     recommendation_match = re.search(recommendation_pattern, report, re.IGNORECASE | re.DOTALL)
-    
+
     if finding_match:
         sections['finding'] = clean_text(finding_match.group(1))
     if conclusion_match:
@@ -78,13 +76,20 @@ for id, value in tqdm(data.items()):
     if recommendation_match:
         sections['recommend'] = clean_text(recommendation_match.group(1))
 
+    # Combine sections into a single report
+    combined_report = (
+        f"[FINDING] {sections['finding']} \n [CONCLUSION] {sections['conclusion']} \n [RECOMMEND] {sections['recommend']}"
+    ).strip()
+
+    # Add combined report to sections
+    sections['diagnosis'] = combined_report
 
     for key, value in data[id].items():
         sections[key] = value
 
     report_info[id] = sections
 
-
+# Save the processed data
 with open(report_pkl_path, 'wb') as pkl_file:
     pickle.dump(report_info, pkl_file)
 

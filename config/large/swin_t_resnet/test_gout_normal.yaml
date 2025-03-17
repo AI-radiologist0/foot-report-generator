@@ -58,6 +58,7 @@ TRAIN:
   PATIENCE: 5
   RESUME: False
   SCHEDULER: ReduceLROnPlateau
+  LOSS: BCELoss
   SHUFFLE: True
   WD: 0.0001
   factor: 0.5
