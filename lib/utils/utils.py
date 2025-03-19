@@ -22,6 +22,8 @@ from tqdm import tqdm
 
 from core.config import get_model_name
 
+random.seed(42)
+
 
 def create_logger(cfg, cfg_name, phase='train'):
     root_output_dir = Path(cfg.OUTPUT_DIR)
@@ -111,6 +113,58 @@ def prepare_binary_data(data, target_class, normal_class='normal'):
     augmented_data = balanced_data * 2
     
     return augmented_data
+
+
+def prepare_data(data, target_classes, cfg, is_binary=False):
+    """
+    Prepare dataset for either binary or multi-class classification with optional balancing and augmentation.
+
+    Args:
+        data (dict): Data from pickle file.
+        target_classes (list): List of target class labels. Ex) ['oa', 'normal'] or ['ra', 'oa', 'gout', 'normal']
+        cfg (object): Configuration object containing:
+            - cfg.DATASET.BINARY (bool): If True, prepares for binary classification.
+            - cfg.DATASET.BALANCE (bool): If True, balances dataset by equalizing class sample counts.
+            - cfg.DATASET.AUGMENT (bool): If True, applies augmentation by duplicating balanced data.
+        is_binary (bool): Deprecated, use cfg.DATASET.BINARY instead.
+
+    Returns:
+        dataset (list): Processed dataset (balanced/augmented based on cfg).
+        class_counts (dict): Number of images per class before processing.
+        final_counts (dict): Number of images per class after processing.
+    """
+    random.seed(42)
+    class_counts, data_by_class = count_labels(data, target_classes)
+    logging.info(f"Original class distribution: {class_counts}")
+
+    # Binary classification check
+    if is_binary and len(target_classes) != 2:
+        raise ValueError("Binary classification requires exactly 2 target classes.")
+
+    # If neither balancing nor augmentation is enabled, return raw data
+    if not cfg.DATASET.BALANCE and not cfg.DATASET.AUGMENT:
+        return sum(data_by_class.values(), []), class_counts, class_counts  
+
+    # Determine minimum class count for balancing
+    min_class_count = min(class_counts.values())
+
+    # Balance dataset by sampling the same number of instances from each class
+    balanced_data = []
+    final_counts = {}
+
+    for label in target_classes:
+        sampled_data = random.sample(data_by_class[label], min_class_count)
+        balanced_data.extend(sampled_data)
+        final_counts[label] = min_class_count
+
+    logging.info(f"Balanced class distribution: {final_counts}")
+
+    # Apply data augmentation if enabled
+    if cfg.DATASET.AUGMENT:
+        balanced_data = balanced_data * 2  # Duplicate dataset
+        logging.info("Applied data augmentation: dataset size doubled.")
+
+    return balanced_data, class_counts, final_counts
     
     
 
@@ -156,7 +210,7 @@ class EarlyStopping:
         else:
             self.counter += 1
             if self.verbose:
-                print(f"EarlyStopping counter: {self.counter} out of {self.patience}")
+                logging.info(f"EarlyStopping counter: {self.counter} out of {self.patience}")
             if self.counter >= self.patience:
                 self.early_stop = True
     def __bool__(self):
@@ -205,11 +259,11 @@ class BestModelSaver:
             # wandb.log({"Best Val Loss": val_loss})
             
             if self.verbose:
-                print(f"🔹 Best model saved! New best loss: {val_loss:.6f}")
+                logging.info(f"🔹 Best model saved! New best loss: {val_loss:.6f}")
 
-    def load_best_model(self, model):
+    def load_best_model(self, model, path=None):
         """저장된 베스트 모델을 로드하는 메서드"""
-        model.load_state_dict(torch.load(self.save_path))
+        model.load_state_dict(torch.load(path if path is not None else self.save_path))
         if self.verbose:
             print(f"✅ Best model loaded from {self.save_path}")
         return model
