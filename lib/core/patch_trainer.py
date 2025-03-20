@@ -54,49 +54,53 @@ class PatchTrainer:
         self.model.train()
         end = time.time()
 
-        for i, (images, patches, labels) in enumerate(data_loader):
-            data_time.update(time.time() - end)
-            images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
+        with tqdm(enumerate(data_loader), desc="Training", total=len(data_loader)) as pbar:
+            
+            for i, (images, patches, labels) in pbar:
+                data_time.update(time.time() - end)
+                images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
 
-            # 🔹 이진 분류(BCE) vs 다중 분류(CE) 적용
-            if self.is_binary:
-                labels = labels.float() # BCE Loss 적용을 위해 차원 확장
-                outputs = self.model(images, patches)
-            else:
-                labels = labels.long()
-                outputs = self.model(images, patches)  # 다중 분류에서는 Softmax 미적용 (CrossEntropy Loss가 내부적으로 적용)
+                # 🔹 이진 분류(BCE) vs 다중 분류(CE) 적용
+                if self.is_binary:
+                    labels = labels.float() # BCE Loss 적용을 위해 차원 확장
+                    outputs = self.model(images, patches)
+                else:
+                    labels = labels.long()
+                    outputs = self.model(images, patches)  # 다중 분류에서는 Softmax 미적용 (CrossEntropy Loss가 내부적으로 적용)
 
-            loss = criterion(outputs, labels)
+                loss = criterion(outputs, labels)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            loss_meter.update(loss.item(), images.size(0))
-            batch_time.update(time.time() - end)
-            end = time.time()
+                loss_meter.update(loss.item(), images.size(0))
+                batch_time.update(time.time() - end)
+                end = time.time()
 
-            # 🔹 정확도 계산 (이진 분류 & 다중 분류)
-            if self.is_binary:
-                preds = (outputs > 0.5).float()  # BCE에서는 0.5 기준으로 분류
-            else:
-                preds = torch.argmax(outputs, dim=1)  # 다중 분류에서는 argmax 사용
+                # 🔹 정확도 계산 (이진 분류 & 다중 분류)
+                if self.is_binary:
+                    preds = (outputs > 0.5).float()  # BCE에서는 0.5 기준으로 분류
+                else:
+                    preds = torch.argmax(outputs, dim=1)  # 다중 분류에서는 argmax 사용
 
-            correct += (preds == labels).sum().item()
-            total += labels.size(0)
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
 
-            # 로그 출력
-            if i % self.print_freq == 0:
-                msg = f'Epoch: [{epoch}] [{i}/{len(data_loader)}] \t ' \
-                      f'Time: {batch_time.val:.3f}s ({batch_time.avg:.3f}s) \t' \
-                      f'Data Time: {data_time.val:.3f}s ({data_time.avg:.3f}s) \t' \
-                      f'Loss: {loss_meter.val:.4f} ({loss_meter.avg:.4f})'
-                logger.info(msg)
+                # 로그 출력
+                if i % self.print_freq == 0:
+                    msg = f'Epoch: [{epoch}] [{i}/{len(data_loader)}] \t ' \
+                        f'Time: {batch_time.val:.3f}s ({batch_time.avg:.3f}s) \t' \
+                        f'Data Time: {data_time.val:.3f}s ({data_time.avg:.3f}s) \t' \
+                        f'Loss: {loss_meter.val:.4f} ({loss_meter.avg:.4f})'
+                    logger.info(msg)
 
-            writer = self.writer_dict['writer']
-            global_steps = self.writer_dict['train_global_steps']
-            writer.add_scalar('train_loss', loss_meter.val, global_steps)
-            self.writer_dict['train_global_steps'] = global_steps + 1
+                writer = self.writer_dict['writer']
+                global_steps = self.writer_dict['train_global_steps']
+                writer.add_scalar('train_loss', loss_meter.val, global_steps)
+                self.writer_dict['train_global_steps'] = global_steps + 1
+                pbar.set_postfix(loss=loss_meter.avg, accuracy=correct/total)
+                
 
         train_acc = correct / total
         acc_meter.update(correct, total)
