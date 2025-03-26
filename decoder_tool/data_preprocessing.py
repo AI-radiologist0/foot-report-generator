@@ -61,8 +61,8 @@ for id, value in tqdm(data.items()):
         recommendation_pattern = r'\[recommendation\s*\](.*)'
     elif report_type == 'old':
         # old 타입일 때 섹션 이름
-        finding_pattern = r'\[finding\s*\](.*?)(?=\[diagnosis\s*\])'
-        conclusion_pattern = r'\[diagnosis\s*\](.*?)(?=\[recommend\s*\])'
+        finding_pattern = r'\[finding\s*\](.*?)(?=\[conclusion\s*\])'
+        conclusion_pattern = r'\[conclusion\s*\](.*?)(?=\[recommend\s*\])'
         recommendation_pattern = r'\[recommend\s*\](.*)'
 
     finding_match = re.search(finding_pattern, report, re.IGNORECASE | re.DOTALL)
@@ -82,10 +82,10 @@ for id, value in tqdm(data.items()):
     ).strip()
 
     # Add combined report to sections
-    sections['diagnosis'] = combined_report
 
     for key, value in data[id].items():
         sections[key] = value
+    sections['new_diagnosis'] = combined_report
 
     report_info[id] = sections
 

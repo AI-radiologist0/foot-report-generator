@@ -11,7 +11,7 @@ DATASET:
   INCLUDE_CLASSES: ['oa', 'ra', 'gout', 'normal']
   JSON: data.json
   MEAN: [0.1147, 0.1147, 0.1147]
-  PKL: data/pkl/output_report(eng).pkl
+  PKL: data/pkl/cleaned_report_for_decoder_train.pkl
   REPORT: True
   ROOT: 
   STD: [0.2194, 0.2194, 0.2194]
@@ -33,11 +33,10 @@ DECODER:
     TEST_BATCH_SIZE: 8
     TRAIN_BATCH_SIZE: 16
     VAL_BATCH_SIZE: 8
-    PT: None
+    PT: wandb/run-report-generator-decoder(v1)/files/best_model.pth
   INIT_WEIGHTS: True
   NAME: GPT2
   PRETRAINED: True
-  
 DEVICE: GPU
 GPUS: 0
 KFOLD:
@@ -52,18 +51,17 @@ MODEL:
     PATCH: Resnet
     RAW: swin-t
     USE_CKPT: True
-    FREEZE: True
   INIT_WEIGHTS: True
   NAME: feature_extractor
   PRETRAINED: True
 OUTPUT_DIR: 
-PHASE: train
-PRINT_FREQ: 10
+PHASE: test
+PRINT_FREQ: 1
 TEST:
-  BATCH_SIZE_PER_GPU: 16
+  BATCH_SIZE_PER_GPU: 8
   TEST_SET_RATIO: 0.15
 TRAIN:
-  BATCH_SIZE_PER_GPU: 32
+  BATCH_SIZE_PER_GPU: 8
   BEGIN_EPOCH: 0
   CHECKPOINT: 
   DECAY: 0.0005

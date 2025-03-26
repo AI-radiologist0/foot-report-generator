@@ -33,7 +33,7 @@ DECODER:
     TEST_BATCH_SIZE: 8
     TRAIN_BATCH_SIZE: 16
     VAL_BATCH_SIZE: 8
-    PT: wandb/run-20250313_153146-anjnooj3/files/best_model.pth
+    PT: wandb/run-report-generator-decoder(last)/files/best_model.pth
   INIT_WEIGHTS: True
   NAME: GPT2
   PRETRAINED: True

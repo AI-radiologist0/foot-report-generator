@@ -169,7 +169,7 @@ class FootPatchesDataset(Dataset):
         file_path = entry['file_path']
         label = self.target_classes.index(entry['class'].lower())  # 정수형 라벨 변환
         patches = entry.get("bbx", [])  # 패치 정보 가져오기
-        report = entry.get("diagnosis", None)  # 보고서 정보 가져오기
+        report = entry.get("diagnosis", None)  # 보고서 정보 
 
         # **Lazy Load: 원본 이미지 로드**
         image = Image.open(file_path).convert("RGB")

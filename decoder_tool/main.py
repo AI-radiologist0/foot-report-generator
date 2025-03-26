@@ -88,8 +88,10 @@ def generate_texts(model, tokenizer, dataloader, device, feature_extractor):
             # Extract and process images
             images = batch["images"].to(device)  # Assuming "images" key in dataset
             patches = batch["patch_tensors"].to(device)
-            image_embeddings = feature_extractor(images, patches)  # Generate image embeddings
+            image_embeddings = feature_extractor(images, patches)   # Generate image embeddings
 
+            
+            
             # Generate text using the model with image embeddings
             outputs = model.generate(
                 input_ids=input_ids,
@@ -107,7 +109,11 @@ def generate_texts(model, tokenizer, dataloader, device, feature_extractor):
             generated_texts.extend(processed_generated_texts)
 
             # Decode reference texts
-            raw_reference_texts = [tokenizer.decode(label, skip_special_tokens=False) for label in batch["labels"]]
+            # raw_reference_texts = [tokenizer.decode(label, skip_special_tokens=False) for label in batch["labels"]]
+            raw_reference_texts = [
+                    tokenizer.decode([token for token in label.tolist() if token >= 0], skip_special_tokens=False)
+                    for label in batch["labels"]
+                ]
             processed_reference_texts = [clean_special_tokens(text) for text in raw_reference_texts]
             reference_texts.extend(processed_reference_texts)
 
@@ -116,7 +122,7 @@ def generate_texts(model, tokenizer, dataloader, device, feature_extractor):
 def main():
     # Argument parser for configuration file
     parser = argparse.ArgumentParser(description="Training pipeline for Foot Report Generator")
-    parser.add_argument('--cfg', type=str, required=True, help='Path to the configuration file')
+    parser.add_argument('--cfg', type=str, default='config/decoder/train_decoder.yaml', required=False, help='Path to the configuration file')
     args = parser.parse_args()
 
     # Update configuration
@@ -171,7 +177,7 @@ def main():
         logger.info("Added [BOS] token as the bos_token to the tokenizer.")
     
     special_tokens_dict = {
-            "additional_special_tokens": ["[FINDING]", "[CONCLUSION]", "[RECOMMEND]"]
+            "additional_special_tokens": ['<img>', "[FINDING]", "[CONCLUSION]", "[RECOMMEND]", "[DIAGNOSIS]", "[RECOMMENDATION]"]
         }
     tokenizer.add_special_tokens(special_tokens_dict)
 
@@ -248,13 +254,16 @@ def main():
     logger.info(f"Tokenizer PAD Token ID: {tokenizer.pad_token_id}, Model PAD Token ID: {decoder_model.config.pad_token_id}")
     logger.info(f"Tokenizer EOS Token ID: {tokenizer.eos_token_id}, Model EOS Token ID: {decoder_model.config.eos_token_id}")
     logger.info(f"Tokenizer BOS Token ID: {tokenizer.bos_token_id}, Model BOS Token ID: {decoder_model.config.bos_token_id}")
+    logger.info(f"Tokenizer Additional Special Tokens: {tokenizer.additional_special_tokens}")
+    logger.info(f"Tokenizer Additional Special Token IDs: {tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens)}")
    
     # Apply LoRA to the decoder model
     logger.info("Applying LoRA to the decoder model...")
+    image_token_id = tokenizer.convert_tokens_to_ids('<img>')
     lora_wrapped_model = get_peft_model(decoder_model, lora_config)
 
     # Wrap the LoRA model with the custom wrapper to support image_embeddings
-    decoder_model = DecoderWithLoRA(lora_wrapped_model, lora_config)
+    decoder_model = DecoderWithLoRA(lora_wrapped_model, lora_config, image_token_id)
     logger.info("LoRA successfully applied.")
 
     # Move the model to the target device
@@ -297,7 +306,7 @@ def main():
     # Test the model on the test set when cfg.PHASE == 'test' or cfg.PHASE == 'train'
     if cfg.PHASE == 'test' or cfg.PHASE == 'train':
 
-        saved_path = cfg.DECODER.EXTRA.PT if cfg.PHASE == 'test' else best_model_saver.save_path
+        saved_path = cfg.DECODER.EXTRA.PT if cfg.PHASE == 'test' and cfg.DECODER.EXTRA.PT is not None else best_model_saver.save_path
         
         # Load the best model
         best_model = best_model_saver.load_best_model(decoder_model, saved_path)
@@ -305,11 +314,21 @@ def main():
         best_model.to(device)
         logger.info("Best model loaded.")
         
-
-        # Generate texts and calculate BLEU score for test set
-        test_generated, test_references = generate_texts(decoder_model, tokenizer, test_loader, device, feature_extractor)
-        test_bleu_score = calculate_bleu_score(test_references, test_generated)
-        logger.info(f"Test BLEU Score = {test_bleu_score:.4f}")
+        _, test_avg_bleu_score, sample_predictions = trainer.validate(1, test_loader)
+        if sample_predictions:
+            columns = ["sample_id", "reference", "prediction", "bleu_score"]
+            data = []
+            for i, sample in enumerate(sample_predictions):
+                data.append([i, sample['reference'], sample['prediction'], sample['bleu_score']])
+            
+            wandb.log({"sample_predictions(TEST)": wandb.Table(columns=columns, data=data)})
+        wandb.log({"bleu(TEST)": test_avg_bleu_score})
+        logger.info(f"BLEU Score(TEST) = {test_avg_bleu_score:.4f}")
+        
+        # # Generate texts and calculate BLEU score for test set
+        # test_generated, test_references = generate_texts(decoder_model, tokenizer, test_loader, device, feature_extractor)
+        # test_bleu_score = calculate_bleu_score(test_references, test_generated)
+        # logger.info(f"Test BLEU Score = {test_bleu_score:.4f}")
 
     # Finish Wandb run
     run.finish()
