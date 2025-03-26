@@ -137,6 +137,8 @@ class FootPatchesDataset(Dataset):
         self.use_raw = config.DATASET.USE_RAW
         self.use_patches = config.DATASET.USE_PATCH
         self.target_classes = config.DATASET.TARGET_CLASSES
+        self.abnormal_classify =  True if len(self.target_classes) == 2 and 'abnormal' in self.target_classes and 'normal' in self.target_classes else False
+        self.abnormal_mapping = {'ra' : 'abnormal', 'oa': 'abnormal', 'gout': 'abnormal', 'normal': 'normal'} if self.abnormal_classify else None
         self.use_report = config.DATASET.REPORT
 
         if isinstance(self.target_classes, str):
@@ -166,8 +168,8 @@ class FootPatchesDataset(Dataset):
         - 레이블 (이진 분류 & 다중 분류 자동 적용)
         """
         entry = self.data[idx]
-        file_path = entry['file_path']
-        label = self.target_classes.index(entry['class'].lower())  # 정수형 라벨 변환
+        file_path = entry['file_path']            
+        label = self.target_classes.index(self.abnormal_mapping[entry['class'].lower()]) if self.abnormal_mapping else self.target_classes.index(entry['class'].lower()) # 정수형 라벨 변환
         patches = entry.get("bbx", [])  # 패치 정보 가져오기
         report = entry.get("diagnosis", None)  # 보고서 정보 가져오기
 

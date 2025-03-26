@@ -60,6 +60,7 @@ def create_logger(cfg, cfg_name, phase='train'):
 
     return logger, str(final_output_dir), str(tensorboard_log_dir)
 
+
 def count_labels(data, target_class):
     """
         Method: count images for each labels.
@@ -113,7 +114,72 @@ def prepare_binary_data(data, target_class, normal_class='normal'):
     augmented_data = balanced_data * 2
     
     return augmented_data
+    
+    
+def prepare_abnormal_normal_data(data, cfg):
+    """
+    Prepare dataset for abnormal vs normal classification.
 
+    Args:
+        data (dict): Data from pickle file.
+        cfg (object): Configuration object containing:
+            - cfg.DATASET.BALANCE (bool): If True, balances dataset by equalizing class sample counts.
+            - cfg.DATASET.AUGMENT (bool): If True, applies augmentation by duplicating balanced data.
+
+    Returns:
+        dataset (list): Processed dataset (balanced/augmented based on cfg).
+        class_counts (dict): Number of images per class before processing.
+        final_counts (dict): Number of images per class after processing.
+    """
+    random.seed(42)
+
+    # Define abnormal and normal classes
+    abnormal_classes = ['ra', 'oa', 'gout']
+    normal_classes = ['normal']
+
+    target_classes = abnormal_classes + normal_classes
+
+    # Count labels and group data by class
+    class_counts, data_by_class = count_labels(data, target_classes)
+    logging.info(f"Original class distribution: {class_counts}")
+
+    # Combine abnormal classes into a single "abnormal" class
+    combined_data_by_class = {
+        'abnormal': sum([data_by_class[cls] for cls in abnormal_classes], []),
+        'normal': data_by_class['normal']
+    }
+
+    combined_class_counts = {
+        'abnormal': sum([class_counts[cls] for cls in abnormal_classes]),
+        'normal': class_counts['normal']
+    }
+
+    logging.info(f"Combined class distribution: {combined_class_counts}")
+
+    # If neither balancing nor augmentation is enabled, return raw data
+    if not cfg.DATASET.BALANCE and not cfg.DATASET.AUGMENT:
+        return sum(combined_data_by_class.values(), []), combined_class_counts, combined_class_counts
+
+    # Determine minimum class count for balancing
+    min_class_count = min(combined_class_counts.values())
+
+    # Balance dataset by sampling the same number of instances from each class
+    balanced_data = []
+    final_counts = {}
+
+    for label in combined_data_by_class.keys():
+        sampled_data = random.sample(combined_data_by_class[label], min_class_count)
+        balanced_data.extend(sampled_data)
+        final_counts[label] = min_class_count
+
+    logging.info(f"Balanced class distribution: {final_counts}")
+
+    # Apply data augmentation if enabled
+    if cfg.DATASET.AUGMENT:
+        balanced_data = balanced_data * 2  # Duplicate dataset
+        logging.info("Applied data augmentation: dataset size doubled.")
+
+    return balanced_data, combined_class_counts, final_counts
 
 def prepare_data(data, target_classes, cfg, is_binary=False):
     """
@@ -122,6 +188,7 @@ def prepare_data(data, target_classes, cfg, is_binary=False):
     Args:
         data (dict): Data from pickle file.
         target_classes (list): List of target class labels. Ex) ['oa', 'normal'] or ['ra', 'oa', 'gout', 'normal']
+                               Special case: ['abnormal', 'normal'] will use abnormal vs normal processing.
         cfg (object): Configuration object containing:
             - cfg.DATASET.BINARY (bool): If True, prepares for binary classification.
             - cfg.DATASET.BALANCE (bool): If True, balances dataset by equalizing class sample counts.
@@ -134,12 +201,19 @@ def prepare_data(data, target_classes, cfg, is_binary=False):
         final_counts (dict): Number of images per class after processing.
     """
     random.seed(42)
-    class_counts, data_by_class = count_labels(data, target_classes)
-    logging.info(f"Original class distribution: {class_counts}")
-
+    
+    # Check if we're doing abnormal vs normal classification
+    if len(target_classes) == 2 and 'abnormal' in target_classes and 'normal' in target_classes:
+        logging.info("Using abnormal vs normal processing logic")
+        return prepare_abnormal_normal_data(data, cfg)
+    
     # Binary classification check
     if is_binary and len(target_classes) != 2:
         raise ValueError("Binary classification requires exactly 2 target classes.")
+
+    # Regular processing for other class combinations
+    class_counts, data_by_class = count_labels(data, target_classes)
+    logging.info(f"Original class distribution: {class_counts}")
 
     # If neither balancing nor augmentation is enabled, return raw data
     if not cfg.DATASET.BALANCE and not cfg.DATASET.AUGMENT:
@@ -165,7 +239,6 @@ def prepare_data(data, target_classes, cfg, is_binary=False):
         logging.info("Applied data augmentation: dataset size doubled.")
 
     return balanced_data, class_counts, final_counts
-    
     
 
 def get_optimizer(cfg, model):
@@ -267,3 +340,5 @@ class BestModelSaver:
         if self.verbose:
             print(f"✅ Best model loaded from {self.save_path}")
         return model
+
+
