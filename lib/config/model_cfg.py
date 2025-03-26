@@ -30,6 +30,8 @@ feature_extractor.RAW = 'swin-t'
 feature_extractor.PATCH = 'Resnet'
 feature_extractor.CKPT = 'wandb/run-multiclass-classifier/files/best_model.pth'
 feature_extractor.USE_CKPT = False
+feature_extractor.FREEZE = True
+feature_extractor.CLASSIFIER_HEAD = False
 
 # Add GPT-2 Configuration
 GPT2 = CN(new_allowed=True)
@@ -40,6 +42,7 @@ GPT2.VAL_BATCH_SIZE = 8    # Validation batch size
 GPT2.TEST_BATCH_SIZE = 8   # Testing batch size
 GPT2.LEARNING_RATE = 5e-5  # Learning rate for training
 GPT2.OPTIMIZER = 'AdamW'   # Optimizer to use
+GPT2.PT = 'wandb/run-20250313_153146-anjnooj3/files/best_model.pth'
 
 # Add GPT-2 to MODEL_EXTRAS
 MODEL_EXTRAS = {
