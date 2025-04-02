@@ -11,6 +11,9 @@ from __future__ import print_function
 import numpy as np
 
 from core.inference import get_max_preds
+from nltk.translate.bleu_score import sentence_bleu
+from rouge_score import rouge_scorer
+import bert_score
 
 
 def calc_dists(preds, target, normalize):
@@ -69,3 +72,40 @@ def accuracy(output, target, hm_type='gaussian', thr=0.5):
     if cnt != 0:
         acc[0] = avg_acc
     return acc, avg_acc, cnt, pred
+
+
+def clean_special_tokens(text, eos_token="[EOS]", pad_token="[PAD]"):
+    """
+    Remove text after the [EOS] token and remove all [PAD] tokens.
+    
+    Args:
+        text (str): Input text to process.
+        eos_token (str): The [EOS] token to look for.
+        pad_token (str): The [PAD] token to remove.
+    
+    Returns:
+        str: Cleaned text with [EOS] and [PAD] tokens handled.
+    """
+    # Remove text after [EOS]
+    if eos_token in text:
+        text = text.split(eos_token)[0].strip()
+    # Remove all [PAD] tokens
+    text = text.replace(pad_token, "").strip()
+    return text
+
+# 단일 쌍에 대해 BLEU, ROUGE-L 점수 계산
+def compute_bleu_rouge(reference, prediction):
+    reference_tokens = reference.split()
+    prediction_tokens = prediction.split()
+
+    bleu = sentence_bleu([reference_tokens], prediction_tokens)
+    
+    scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
+    rouge_l = scorer.score(reference, prediction)['rougeL'].fmeasure
+
+    return bleu, rouge_l
+
+# 여러 쌍에 대해 BERTScore 계산
+def compute_bertscore(predictions, references, lang="en"):
+    P, R, F1 = bert_score.score(predictions, references, lang=lang, verbose=False)
+    return F1.tolist()  # 각 쌍별 F1 점수 리스트 반환

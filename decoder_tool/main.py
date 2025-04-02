@@ -1,25 +1,28 @@
 import argparse
+import gc
 import os
 import pickle
 import torch
-from torch.utils.data import DataLoader, random_split
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import LoraConfig, get_peft_model
 import wandb
 import logging
 from datetime import datetime
 from nltk.translate.bleu_score import sentence_bleu
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader, random_split
+
 
 import _init_path
 from config import cfg, update_config
 from dataset.joint_patches import FootPatchesDataset
 from utils.collate_fn import TokenizedReportCollateFn
+from utils.tokenizer import load_and_prepare_tokenizer
 from utils.utils import EarlyStopping, BestModelSaver, get_optimizer
 from core.decoder_trainer import DecoderTrainer, clean_special_tokens
 
 import models
 from models.decoder import get_decoder_with_image_embedding, DecoderWithLoRA
+from models.decoder import get_decoder
+
 
 def initialize_logger(output_dir):
     """Initialize a logger to save logs to a file and print them to the console."""
@@ -122,11 +125,14 @@ def generate_texts(model, tokenizer, dataloader, device, feature_extractor):
 def main():
     # Argument parser for configuration file
     parser = argparse.ArgumentParser(description="Training pipeline for Foot Report Generator")
-    parser.add_argument('--cfg', type=str, default='config/decoder/train_decoder.yaml', required=False, help='Path to the configuration file')
+    parser.add_argument('--cfg', type=str, default='config/decoder/train_decoder_without_LoRA.yaml', required=False, help='Path to the configuration file')
     args = parser.parse_args()
 
     # Update configuration
     update_config(cfg, args)
+
+    # Empty Cache
+    torch.cuda.empty_cache()
 
     # Set up output directory and logger
     timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -144,59 +150,39 @@ def main():
     writer_dict = {'writer': SummaryWriter(log_dir=os.path.join(output_dir, 'tensorboard')),
                    "train_global_steps": 0,
                    "valid_global_steps": 0}
-
+    use_lora = "w.LoRA" if cfg.DECODER.USE_LORA else "w/o.LoRA"
     # Initialize Wandb
     run = wandb.init(
         config=dict(cfg),
         name=f"Decoder_{cfg.DECODER.NAME}_{cfg.DATASET.PKL}_{cfg.TRAIN.END_EPOCH}_epochs",
         notes="Training decoder model with LoRA",
-        tags=["decoder", "LoRA", "training"]
+        tags=["decoder", use_lora , "training"]
     )
 
     if cfg.DECODER.NAME == 'GPT2':
         community = "openai-community"
+    if cfg.DECODER.NAME == "meerkat-7b-v1.0":
+        community = "dmis-lab"
+    if cfg.DECODER.NAME == "dmis-lab-meerkat-7b-v1.0-AWQ-4bit-smashed":
+        community = "PrunaAI"
+    if cfg.DECODER.NAME == "EXAONE-3.5-2.4B-Instruct":
+        community = "LGAI-EXAONE"
     
-    decoder_huggingface_name = f"{community}/{cfg.DECODER.NAME.lower()}"
-    
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(decoder_huggingface_name)
-    logger.info("GPT-2 Tokenizer loaded.")
+    model_size = '' if cfg.DECODER.EXTRA.MODEL_SIZE == "small" else f"-{cfg.DECODER.EXTRA.MODEL_SIZE.lower()}"
 
-    # Tokenizer setup
-    if tokenizer.pad_token is None:
-        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-        logger.info("Added [PAD] token as the pad_token to the tokenizer.")
+    decoder_huggingface_name = f"{community}/{cfg.DECODER.NAME.lower()}{model_size}"
+    logging.info(f"Model Name: {decoder_huggingface_name}")
+    tokenizer = load_and_prepare_tokenizer(
+        model_name = decoder_huggingface_name,
+        additional_special_tokens= ['<img>', "[FINDING]", "[CONCLUSION]", "[RECOMMEND]", "[DIAGNOSIS]", "[RECOMMENDATION]"]
+    )
     
-
-    if tokenizer.eos_token != "[EOS]":
-        tokenizer.add_special_tokens({'eos_token': "[EOS]"})
-        logger.info("Added [EOS] token as the eos_token to the tokenizer.")
-    
-    if tokenizer.bos_token != "[BOS]":
-        tokenizer.add_special_tokens({'bos_token': '[BOS]'})
-        logger.info("Added [BOS] token as the bos_token to the tokenizer.")
-    
-    special_tokens_dict = {
-            "additional_special_tokens": ['<img>', "[FINDING]", "[CONCLUSION]", "[RECOMMEND]", "[DIAGNOSIS]", "[RECOMMENDATION]"]
-        }
-    tokenizer.add_special_tokens(special_tokens_dict)
-
-    tokenizer.padding_side = "left"
-
     # Load dataset
     with open(cfg.DATASET.PKL, 'rb') as f:
         pkl_data = pickle.load(f)
 
     dataset = FootPatchesDataset(cfg, pkl_data)
-    collate_fn = TokenizedReportCollateFn(tokenizer, max_length=cfg.DECODER.EXTRA.MAX_SEQ_LENGTH, save_path='./token.txt')
-
-    # Logging Special Token IDs.
-    logger.info(f"Special Tokens: {tokenizer.special_tokens_map}")
-    logger.info(f"BOS Token: {tokenizer.bos_token} (ID: {tokenizer.bos_token_id})")
-    logger.info(f"EOS Token: {tokenizer.eos_token} (ID: {tokenizer.eos_token_id})")
-    logger.info(f"PAD Token: {tokenizer.pad_token} (ID: {tokenizer.pad_token_id})")
-    logger.info(f"Additional Special Tokens: {tokenizer.additional_special_tokens}")
-    logger.info(f"Additional Special Token IDs: {tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens)}")
+    collate_fn = TokenizedReportCollateFn(tokenizer, cfg, max_length=cfg.DECODER.EXTRA.MAX_SEQ_LENGTH, save_path='./meerkat_token.txt')
 
     # Split dataset into train, validation, and test sets
     train_size = int(0.7 * len(dataset))
@@ -218,57 +204,14 @@ def main():
     feature_extractor = feature_extractor.to(device)
     logger.info("Feature extractor model loaded.")
 
-    # # Generate image embeddings
-    # logger.info("Generating image embeddings...")
-    # image_embeddings = generate_image_embeddings(feature_extractor, train_loader, device)
+    decoder_model = get_decoder(cfg, tokenizer, model_name=decoder_huggingface_name)
 
-    # LoRA configuration
-    lora_config = LoraConfig(
-        r=8,  # LoRA rank
-        lora_alpha=32,  # Scaling factor
-        target_modules=["c_attn", "image_projection"],  # LoRA applied modules
-        lora_dropout=0.1,  # Dropout
-        bias="none",
-        task_type="CAUSAL_LM"
-    )
+    logger.info(f"Decoder Model Class: {type(decoder_model)} on {decoder_huggingface_name}")
+    # total_params = sum(p.numel() for p in decoder_model.parameters() if p.requires_grad)
+    # logger.info(f"Total trainable parameters: {total_params}")
 
-    # Initialize decoder model with image embedding support
-    decoder_model = get_decoder_with_image_embedding(decoder_huggingface_name)
-
-    # Resize token embeddings to accommodate new tokens
-    decoder_model.resize_token_embeddings(len(tokenizer))
-    logger.info("Resized model embeddings to accommodate new tokens.")
-
-    # Log PAD Token ID
-    logger.info(f"Decoder Model PAD Token ID: {decoder_model.config.pad_token_id}")
-    decoder_model.config.pad_token_id = tokenizer.pad_token_id
-    logger.info(f"Decoder Model Updated PAD Token ID: {decoder_model.config.pad_token_id}")
-
-    decoder_model.config.eos_token_id = tokenizer.eos_token_id
-    logger.info(f"Set Decoder Model EOS Token ID to: {decoder_model.config.eos_token_id}")
-    
-    # Log BOS Token ID
-    decoder_model.config.bos_token_id = tokenizer.bos_token_id
-    logger.info(f"Set Decoder Model BOS Token ID to: {decoder_model.config.bos_token_id}")
-
-    logger.info(f"Tokenizer PAD Token ID: {tokenizer.pad_token_id}, Model PAD Token ID: {decoder_model.config.pad_token_id}")
-    logger.info(f"Tokenizer EOS Token ID: {tokenizer.eos_token_id}, Model EOS Token ID: {decoder_model.config.eos_token_id}")
-    logger.info(f"Tokenizer BOS Token ID: {tokenizer.bos_token_id}, Model BOS Token ID: {decoder_model.config.bos_token_id}")
-    logger.info(f"Tokenizer Additional Special Tokens: {tokenizer.additional_special_tokens}")
-    logger.info(f"Tokenizer Additional Special Token IDs: {tokenizer.convert_tokens_to_ids(tokenizer.additional_special_tokens)}")
-   
-    # Apply LoRA to the decoder model
-    logger.info("Applying LoRA to the decoder model...")
-    image_token_id = tokenizer.convert_tokens_to_ids('<img>')
-    lora_wrapped_model = get_peft_model(decoder_model, lora_config)
-
-    # Wrap the LoRA model with the custom wrapper to support image_embeddings
-    decoder_model = DecoderWithLoRA(lora_wrapped_model, lora_config, image_token_id)
-    logger.info("LoRA successfully applied.")
-
-    # Move the model to the target device
-    decoder_model.to(device)
-    logger.info("Decoder model with LoRA initialized.")
+    decoder_model = decoder_model.to(device)
+    logger.info(f"Configuration: Decoder Model and to device on {device}")
 
     # Decoder Trainer
     optimizer = get_optimizer(cfg, decoder_model)
@@ -283,18 +226,31 @@ def main():
             logger.info(f"Epoch {epoch} starting...")
                 
             train_loss = trainer.train(epoch, train_loader, optimizer)
-            val_loss, val_avg_bleu_score, sample_predictions = trainer.validate(epoch, val_loader)
+            val_loss = trainer.validate(epoch, val_loader)
 
-            if sample_predictions:
-                columns = ["sample_id", "reference", "prediction", "bleu_score"]
-                data = []
-                for i, sample in enumerate(sample_predictions):
-                    data.append([i, sample['reference'], sample['prediction'], sample['bleu_score']])
-                
-                wandb.log({"sample_predictions": wandb.Table(columns=columns, data=data)})
+            if epoch % cfg.PRINT_FREQ == 0 and epoch > 0:
+                bleu, rouge, bert, predictions = trainer.inference(epoch, val_loader)
+                if predictions:
+                    columns = ["sample_id", "reference", "prediction", "bleu_score", "ROUGE-L", "BERTSCORE"]
+                    data = []
+                    for i, sample in enumerate(predictions):
+                        data.append([
+                            i, 
+                            sample['reference'], 
+                            sample['prediction'], 
+                            sample['bleu_score'],
+                            sample['rouge_l'], 
+                            sample['bert_f1']]
+                        )
+                    
+                    wandb.log({"sample_predictions": wandb.Table(columns=columns, data=data)})
+                wandb.log({"BLUE": bleu, "ROUGE": rouge, "bert": bert})
+                logger.info(f"Inference Step {epoch}: BLEU_SCORE = {bleu:.4f} ROUGE = {rouge:.4f} BERT = {bert:.4f}")
+
 
             logger.info(f"Epoch {epoch}: Train Loss = {train_loss:.4f}, Validation Loss = {val_loss:.4f}")
-            wandb.log({"train_loss": train_loss, "val_loss": val_loss, "val_bleu": val_avg_bleu_score})
+            wandb.log({"train_loss": train_loss, "val_loss": val_loss})
+
 
             best_model_saver.save(decoder_model, val_loss)
             early_stopping(val_loss)
@@ -302,10 +258,13 @@ def main():
             if early_stopping:
                 logger.info("Early stopping triggered.")
                 break
+    
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # Test the model on the test set when cfg.PHASE == 'test' or cfg.PHASE == 'train'
     if cfg.PHASE == 'test' or cfg.PHASE == 'train':
-
+        
         saved_path = cfg.DECODER.EXTRA.PT if cfg.PHASE == 'test' and cfg.DECODER.EXTRA.PT is not None else best_model_saver.save_path
         
         # Load the best model
@@ -314,21 +273,31 @@ def main():
         best_model.to(device)
         logger.info("Best model loaded.")
         
-        _, test_avg_bleu_score, sample_predictions = trainer.validate(1, test_loader)
-        if sample_predictions:
-            columns = ["sample_id", "reference", "prediction", "bleu_score"]
+        bleu, rouge, bert, predictions = trainer.inference(epoch, val_loader)
+        if predictions:
+            columns = ["sample_id", "reference", "prediction", "bleu_score", "ROUGE-L", "BERTSCORE"]
             data = []
-            for i, sample in enumerate(sample_predictions):
-                data.append([i, sample['reference'], sample['prediction'], sample['bleu_score']])
+            for i, sample in enumerate(predictions):
+                data.append([
+                        i, 
+                        sample['reference'], 
+                        sample['prediction'], 
+                        sample['bleu_score'],
+                        sample['rouge_l'], 
+                        sample['bert_f1']]
+                    )
             
             wandb.log({"sample_predictions(TEST)": wandb.Table(columns=columns, data=data)})
-        wandb.log({"bleu(TEST)": test_avg_bleu_score})
-        logger.info(f"BLEU Score(TEST) = {test_avg_bleu_score:.4f}")
+        wandb.log({"bleu(TEST)": bleu, "rouge(TEST)": rouge, "bert": bert})
+        logger.info(f"BLEU Score(TEST) = {bleu:.4f}")
         
         # # Generate texts and calculate BLEU score for test set
         # test_generated, test_references = generate_texts(decoder_model, tokenizer, test_loader, device, feature_extractor)
         # test_bleu_score = calculate_bleu_score(test_references, test_generated)
         # logger.info(f"Test BLEU Score = {test_bleu_score:.4f}")
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # Finish Wandb run
     run.finish()

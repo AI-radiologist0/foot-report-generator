@@ -1,5 +1,7 @@
 from transformers import AutoModelForCausalLM
+from peft import get_peft_model, LoraConfig
 from .feature_extractor import get_feature_extractor
+from utils.utils import insert_before_bos, prepare_generate_inputs
 from torch import nn
 import torch
 from peft import PeftModel  # Import LoRA wrapper
@@ -97,106 +99,84 @@ class DecoderWithFeatureExtractor(nn.Module):
         if hasattr(self, 'feature_extractor') and not any(p.requires_grad for p in self.feature_extractor.parameters()):
             self.feature_extractor.eval()  # Keep feature extractor in eval mode if frozen
 
-# Example usage:
-# decoder_with_fe = DecoderWithFeatureExtractor(config, feature_extractor_ckpt="path/to/checkpoint.pth", freeze_feature_extractor=False)
 
-class DecoderWithImageEmbedding(AutoModelForCausalLM):
-    def __init__(self, config, image_embedding_dim=2816, text_embedding_dim=768):
-        super().__init__(config)
-        # Add a projection layer to map image embeddings to text embedding space
-        self.image_projection = nn.Linear(image_embedding_dim, text_embedding_dim)
+class DecoderWithImageEmbedding(nn.Module):
+    def __init__(self, base_model, image_embedding_dim=2816, text_embedding_dim=768, img_token_id=None):
+        super().__init__()
+        self.base_model = base_model
+        self.text_embedding_dim = self.base_model.config.hidden_size
+        self.image_projection = nn.Linear(image_embedding_dim, self.text_embedding_dim)
+        self.img_token_id = img_token_id
+
+    def get_input_embeddings(self):
+        return self.base_model.get_input_embeddings()
 
     def forward(self, input_ids, attention_mask=None, labels=None, image_embeddings=None, **kwargs):
         if image_embeddings is not None:
-            # logger.info("Process Image_embedding")
-            # 이미지 임베딩을 텍스트 임베딩 크기로 변환
-            projected_image_embeddings = self.image_projection(image_embeddings)
-            # 텍스트 토큰에 대한 임베딩 추출
+            projected_image_embeddings = self.image_projection(image_embeddings)  # (B, D)
             input_embeddings = self.get_input_embeddings()(input_ids)
-            
-            # BOS Token 위치 
-            # [BOS] 토큰의 위치를 찾아 <img>를 그 앞에 삽입
-            bos_token_id = self.lora_model.config.bos_token_id
-            bos_positions = (input_ids == bos_token_id).nonzero(as_tuple=True)  # [batch_idx, position]
 
-            # 새로운 input_ids 생성
-            new_input_ids = []
-            for batch_idx in range(input_ids.size(0)):
-                bos_position = bos_positions[1][batch_idx]  # [BOS]의 위치
-                before_bos = input_ids[batch_idx, :bos_position]  # [BOS] 이전의 토큰
-                after_bos = input_ids[batch_idx, bos_position:]  # [BOS] 포함 이후의 토큰
-                new_input_ids.append(torch.cat([
-                    torch.tensor([self.img_token_id], dtype=input_ids.dtype, device=input_ids.device),
-                    before_bos,
-                    after_bos
-                ]))
-            new_input_ids = torch.stack(new_input_ids)
+            combined_embeddings, new_attention_mask, new_labels = insert_before_bos(
+                input_ids=input_ids,
+                input_embeddings=input_embeddings,
+                image_embeddings=projected_image_embeddings,
+                bos_token_id=self.base_model.config.bos_token_id,
+                attention_mask=attention_mask,
+                labels=labels
+            )
 
-            # 새로운 attention_mask 생성
-            if attention_mask is not None:
-                new_attention_mask = []
-                for batch_idx in range(attention_mask.size(0)):
-                    bos_position = bos_positions[1][batch_idx]
-                    before_bos = attention_mask[batch_idx, :bos_position]
-                    after_bos = attention_mask[batch_idx, bos_position:]
-                    new_attention_mask.append(torch.cat([
-                        torch.tensor([1], dtype=attention_mask.dtype, device=attention_mask.device),  # <img> 토큰 활성화
-                        before_bos,
-                        after_bos
-                    ]))
-                new_attention_mask = torch.stack(new_attention_mask)
-            else:
-                new_attention_mask = torch.ones_like(new_input_ids, dtype=torch.long)
-
-            # 새로운 labels 생성
-            if labels is not None:
-                new_labels = []
-                for batch_idx in range(labels.size(0)):
-                    bos_position = bos_positions[1][batch_idx]
-                    before_bos = labels[batch_idx, :bos_position]
-                    after_bos = labels[batch_idx, bos_position:]
-                    new_labels.append(torch.cat([
-                        torch.tensor([-100], dtype=labels.dtype, device=labels.device),  # <img> 토큰은 손실 계산에서 제외
-                        before_bos,
-                        after_bos
-                    ]))
-                new_labels = torch.stack(new_labels)
-            else:
-                new_labels = None
-
-            # 이미지 임베딩과 텍스트 임베딩 결합
-            combined_embeddings = torch.cat([
-                projected_image_embeddings.unsqueeze(1),  # <img> 임베딩
-                input_embeddings
-            ], dim=1)
-            
-            # 이미지 임베딩과 텍스트 임베딩을 concat (이미지 임베딩을 앞에 추가)
-            combined_embeddings = torch.cat([projected_image_embeddings.unsqueeze(1), input_embeddings], dim=1)
-            
-            # attention_mask에도 이미지 토큰에 해당하는 1을 prepend
-            if attention_mask is not None:
-                new_attention_mask = torch.cat([
-                    torch.ones((attention_mask.size(0), 1), dtype=attention_mask.dtype, device=attention_mask.device),
-                    attention_mask
-                ], dim=1)
-            else:
-                new_attention_mask = torch.ones((combined_embeddings.size(0), combined_embeddings.size(1)), dtype=torch.long, device=combined_embeddings.device)
-            
-            # kwargs 내부에 image_embeddings 로깅 (이미 전달된 경우)
-            if "image_embeddings" in kwargs:
-                logger.info(f"✅ DecoderWithImageEmbedding.forward(): image_embeddings detected in kwargs: {kwargs['image_embeddings'].shape}")
-            
-            # input_ids 대신 inputs_embeds와 새 attention_mask를 사용해 forward 호출
-            return super().forward(inputs_embeds=combined_embeddings, attention_mask=new_attention_mask, labels=labels, **kwargs)
+            return self.base_model.forward(
+                inputs_embeds=combined_embeddings,
+                attention_mask=new_attention_mask,
+                labels=new_labels,
+                **kwargs
+            )
         else:
-            return super().forward(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **kwargs)
+            return self.base_model.forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                **kwargs
+            )
 
+    def generate(self, input_ids=None, attention_mask=None, image_embeddings=None, **kwargs):
+        if image_embeddings is not None:
+            projected_image_embeddings = self.image_projection(image_embeddings)
+
+            if input_ids is None:
+                input_ids, attention_mask = prepare_generate_inputs(
+                    img_token_id=self.img_token_id,
+                    bos_token_id=self.base_model.config.bos_token_id,
+                    device=projected_image_embeddings.device,
+                    batch_size=projected_image_embeddings.size(0)
+                )
+
+            input_embeddings = self.get_input_embeddings()(input_ids)
+
+            combined_embeddings, new_attention_mask, _ = insert_before_bos(
+                input_ids=input_ids,
+                input_embeddings=input_embeddings,
+                image_embeddings=projected_image_embeddings,
+                bos_token_id=self.base_model.config.bos_token_id,
+                attention_mask=attention_mask
+            )
+
+            return self.base_model.generate(
+                inputs_embeds=combined_embeddings,
+                attention_mask=new_attention_mask,
+                **kwargs
+            )
+        else:
+            return self.base_model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                **kwargs
+            )
 
     def to(self, *args, **kwargs):
-        # Ensure the image projection layer is moved to the correct device
         self.image_projection.to(*args, **kwargs)
         return super().to(*args, **kwargs)
-
+    
 
 class DecoderWithLoRA(nn.Module):
     def __init__(self, lora_model, peft_config, img_token_id):  # ⭕ 오타 수정
@@ -204,121 +184,34 @@ class DecoderWithLoRA(nn.Module):
         self.lora_model = lora_model
         self.peft_config = peft_config
         self.img_token_id = img_token_id  # ✅ 올바른 변수명 적용
+        self.text_embedding_dim = self.lora_model.config.hidden_size
 
         # Extract the image projection layer from the original model
         if hasattr(lora_model.base_model.model, 'image_projection'):
             self.image_projection = lora_model.base_model.model.image_projection
         else:
-            self.image_projection = nn.Linear(2816, 768)
+            self.image_projection = nn.Linear(2816, self.text_embedding_dim)
 
     def forward(self, input_ids, attention_mask=None, labels=None, image_embeddings=None, **kwargs):
-        
         if image_embeddings is not None:
-            # logger.info(f"✅ Processing Image Embeddings: Shape {image_embeddings.shape}")
-
-            # 이미지 임베딩을 텍스트 임베딩 크기로 변환
             projected_image_embeddings = self.image_projection(image_embeddings)
             input_embeddings = self.lora_model.get_input_embeddings()(input_ids)
 
-            # [BOS] 토큰의 위치를 찾아 <img>를 그 앞에 삽입
-            bos_token_id = self.lora_model.config.bos_token_id
-            bos_positions = (input_ids == bos_token_id).nonzero(as_tuple=True)  # [batch_idx, position]
+            combined_embeddings, new_attention_mask, new_labels = insert_before_bos(
+                input_ids=input_ids,
+                input_embeddings=input_embeddings,
+                image_embeddings=projected_image_embeddings,
+                bos_token_id=self.lora_model.config.bos_token_id,
+                attention_mask=attention_mask,
+                labels=labels
+            )
 
-            # 새로운 input_ids 생성
-            new_input_ids = []
-            for batch_idx in range(input_ids.size(0)):
-                bos_position = bos_positions[1][batch_idx]  # [BOS]의 위치
-                before_bos = input_ids[batch_idx, :bos_position]  # [BOS] 이전의 토큰
-                after_bos = input_ids[batch_idx, bos_position:]  # [BOS] 포함 이후의 토큰
-                new_input_ids.append(torch.cat([
-                    torch.tensor([self.img_token_id], dtype=input_ids.dtype, device=input_ids.device),
-                    before_bos,
-                    after_bos
-                ]))
-            new_input_ids = torch.stack(new_input_ids)
-
-            # 새로운 attention_mask 생성
-            if attention_mask is not None:
-                new_attention_mask = []
-                for batch_idx in range(attention_mask.size(0)):
-                    bos_position = bos_positions[1][batch_idx]
-                    before_bos = attention_mask[batch_idx, :bos_position]
-                    after_bos = attention_mask[batch_idx, bos_position:]
-                    new_attention_mask.append(torch.cat([
-                        torch.tensor([1], dtype=attention_mask.dtype, device=attention_mask.device),  # <img> 토큰 활성화
-                        before_bos,
-                        after_bos
-                    ]))
-                new_attention_mask = torch.stack(new_attention_mask)
-            else:
-                new_attention_mask = torch.ones_like(new_input_ids, dtype=torch.long)
-
-            # 새로운 labels 생성
-            if labels is not None:
-                new_labels = []
-                for batch_idx in range(labels.size(0)):
-                    bos_position = bos_positions[1][batch_idx]
-                    before_bos = labels[batch_idx, :bos_position]
-                    after_bos = labels[batch_idx, bos_position:]
-                    new_labels.append(torch.cat([
-                        torch.tensor([-100], dtype=labels.dtype, device=labels.device),  # <img> 토큰은 손실 계산에서 제외
-                        before_bos,
-                        after_bos
-                    ]))
-                new_labels = torch.stack(new_labels)
-            else:
-                new_labels = None
-
-            # 이미지 임베딩과 텍스트 임베딩 결합
-            combined_embeddings = torch.cat([
-                projected_image_embeddings.unsqueeze(1),  # <img> 임베딩
-                input_embeddings
-            ], dim=1)
-
-        
-            # combined_embeddings = torch.cat([projected_image_embeddings.unsqueeze(1), input_embeddings], dim=1)
-
-            # new_input_ids = torch.cat([
-            #     torch.full((input_ids.size(0), 1), self.img_token_id, dtype=input_ids.dtype, device=input_ids.device),  
-            #     input_ids
-            # ], dim=1)
-
-            # if attention_mask is not None:
-            #     new_attention_mask = torch.cat([
-            #         torch.ones((attention_mask.size(0), 1), dtype=attention_mask.dtype, device=attention_mask.device),  
-            #         attention_mask
-            #     ], dim=1)
-            # else:
-            #     new_attention_mask = None
-
-            # if labels is not None:
-            #     new_labels = torch.cat([
-            #         torch.full((labels.size(0), 1), -100, dtype=labels.dtype, device=labels.device),  
-            #         labels
-            #     ], dim=1)
-
-            #     if new_labels.size(1) > new_input_ids.size(1):
-            #         new_labels = new_labels[:, :new_input_ids.size(1)]
-            #     elif new_labels.size(1) < new_input_ids.size(1):
-            #         padding = torch.full(
-            #             (new_labels.size(0), new_input_ids.size(1) - new_labels.size(1)),
-            #             -100,
-            #             dtype=new_labels.dtype,
-            #             device=new_labels.device
-            #         )
-            #         new_labels = torch.cat([new_labels, padding], dim=1)
-            # else:
-            #     new_labels = None
-            
-
-            outputs = self.lora_model(
-                inputs_embeds = combined_embeddings,
+            return self.lora_model(
+                inputs_embeds=combined_embeddings,
                 attention_mask=new_attention_mask,
                 labels=new_labels,
                 **kwargs
             )
-
-            return outputs
         else:
             return self.lora_model(
                 input_ids=input_ids,
@@ -328,91 +221,39 @@ class DecoderWithLoRA(nn.Module):
             )
 
     def generate(self, input_ids=None, attention_mask=None, image_embeddings=None, **kwargs):
-        """Generate text using both image and text embeddings."""
         if image_embeddings is not None:
-            # logger.info(f"✅ DecoderWithLoRA.generate(): image_embeddings detected! Shape: {image_embeddings.shape}")
-
             projected_image_embeddings = self.image_projection(image_embeddings)
-            # 입력 토큰이 없는 경우 기본 입력 생성
+
             if input_ids is None:
-                input_ids = torch.tensor(
-                    [[self.img_token_id, self.lora_model.config.bos_token_id, self.lora_model.config.additional_special_tokens_ids[0]]],
-                    dtype=torch.long,
-                    device=projected_image_embeddings.device
+                input_ids, attention_mask = prepare_generate_inputs(
+                    self.img_token_id,
+                    self.lora_model.config.bos_token_id,
+                    projected_image_embeddings.device,
+                    batch_size=projected_image_embeddings.size(0)
                 )
 
-            # 입력 토큰에 대한 임베딩 생성
             input_embeddings = self.lora_model.get_input_embeddings()(input_ids)
-            combined_embeddings = torch.cat([
-                projected_image_embeddings.unsqueeze(1),  # <img> 임베딩
-                input_embeddings
-            ], dim=1)
+            combined_embeddings, new_attention_mask, _ = insert_before_bos(
+                input_ids=input_ids,
+                input_embeddings=input_embeddings,
+                image_embeddings=projected_image_embeddings,
+                bos_token_id=self.lora_model.config.bos_token_id,
+                attention_mask=attention_mask,
+                labels=None
+            )
 
-            # attention_mask 생성
-            if attention_mask is None:
-                attention_mask = torch.ones_like(input_ids, dtype=torch.long)
-            new_attention_mask = torch.cat([
-                torch.ones((attention_mask.size(0), 1), dtype=attention_mask.dtype, device=attention_mask.device),  # <img> 토큰 활성화
-                attention_mask
-            ], dim=1)
-
-            # 텍스트 생성
             return self.lora_model.generate(
                 inputs_embeds=combined_embeddings,
                 attention_mask=new_attention_mask,
                 **kwargs
             )
         else:
-            # 이미지 임베딩 없이 기존 텍스트로 생성
             return self.lora_model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 **kwargs
             )
-        #     if input_ids is None:
-        #         # ✅ 텍스트 없이 이미지 임베딩만으로 생성
-        #         new_input_ids = torch.full(
-        #             (projected_image_embeddings.size(0), 1),
-        #             self.img_token_id,
-        #             dtype=torch.long,
-        #             device=projected_image_embeddings.device
-        #         )
-        #         input_embeddings = projected_image_embeddings.unsqueeze(1)  # [batch, 1, embedding_dim]
-        #     else:
-        #         # ✅ 기존 텍스트 임베딩 가져오기
-        #         new_input_ids = torch.cat([
-        #             torch.full((input_ids.size(0), 1), self.img_token_id, dtype=input_ids.dtype, device=input_ids.device),
-        #             input_ids
-        #         ], dim=1)
 
-        #         input_embeddings = self.lora_model.get_input_embeddings()(input_ids)
-        #         input_embeddings = torch.cat([projected_image_embeddings.unsqueeze(1), input_embeddings], dim=1)
-
-        #     if attention_mask is not None:
-        #         # 기존 attention_mask 앞에 이미지 토큰에 해당하는 1 추가
-        #         new_attention_mask = torch.cat([
-        #             torch.ones((attention_mask.size(0), 1), dtype=attention_mask.dtype, device=attention_mask.device),
-        #             attention_mask
-        #         ], dim=1)
-        #     else:
-        #         # attention_mask가 없을 경우, new_input_ids와 동일한 크기의 1로 채워진 마스크 생성
-        #         new_attention_mask = torch.ones((new_input_ids.size(0), new_input_ids.size(1)), dtype=torch.long, device=new_input_ids.device)
-
-        #     # position_ids = torch.arange(input_embeddings.size(1), dtype=torch.long, device=input_embeddings.device).unsqueeze(0)
-
-        #     # ✅ `input_ids` 대신 `inputs_embeds`로 텍스트 생성
-        #     return self.lora_model.generate(
-        #         input_ids=new_input_ids,  # ✅ input_ids 대신 new_input_ids 사용
-        #         inputs_embeds=input_embeddings,  # ✅ generate()에서도 inputs_embeds 사용
-        #         attention_mask=new_attention_mask,
-        #         **kwargs
-        #     )
-        # else:
-        #     return self.lora_model.generate(
-        #         input_ids=input_ids,
-        #         attention_mask=attention_mask,
-        #         **kwargs
-        #     )
                 
     def to(self, *args, **kwargs):
         # Ensure all components are moved to the correct device
@@ -423,4 +264,42 @@ class DecoderWithLoRA(nn.Module):
 def get_decoder_with_image_embedding(model_name_or_path):
     # Load the decoder model with the custom class
     decoder = DecoderWithImageEmbedding.from_pretrained(model_name_or_path)
+    return decoder
+
+def get_decoder(cfg, tokenizer, model_name=None):
+    model_name = cfg.DECODER.NAME  if model_name is None else model_name # e.g., "dmis-lab/meerkat-7b-v1.0, open-ai/gpt2"
+    # base_model = AutoModelForCausalLM.from_pretrained(model_name)
+    base_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16)
+
+    base_model.config.pad_token_id = tokenizer.pad_token_id
+    base_model.config.eos_token_id = tokenizer.eos_token_id
+    base_model.config.bos_token_id = tokenizer.bos_token_id
+    base_model.resize_token_embeddings(len(tokenizer))
+    # Load base model
+    if cfg.DECODER.USE_LORA:
+        logger.info("Loading decoder with LoRA...")
+        # base_model = DecoderWithImageEmbedding.from_pretrained(model_name)
+        image_token_id = tokenizer.convert_tokens_to_ids("<img>")
+
+        if "GPT" in model_name:
+            target_modules = ["c_attn"]
+        else:
+            target_modules = ["q_proj", "k_proj", "v_proj"]
+
+        # LoRA 설정
+        lora_config = LoraConfig(
+            r=16,
+            lora_alpha=32,
+            target_modules=target_modules,
+            lora_dropout=0.1,
+            bias="none",
+            task_type="CAUSAL_LM"
+        )
+
+        lora_wrapped = get_peft_model(base_model, lora_config)
+        decoder = DecoderWithLoRA(lora_wrapped, lora_config, image_token_id)
+    else:
+        logger.info("Loading decoder without LoRA...")
+        decoder = DecoderWithImageEmbedding(base_model=base_model)
+
     return decoder
