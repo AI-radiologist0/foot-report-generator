@@ -243,6 +243,7 @@ def prepare_data(data, target_classes, cfg, is_binary=False):
 
 def get_optimizer(cfg, model):
     optimizer = None
+
     if cfg.TRAIN.OPTIMIZER == 'sgd':
         optimizer = optim.SGD(
             model.parameters(),
@@ -251,14 +252,21 @@ def get_optimizer(cfg, model):
             weight_decay=cfg.TRAIN.WD,
             nesterov=cfg.TRAIN.NESTEROV
         )
+
     elif cfg.TRAIN.OPTIMIZER == 'adam':
         optimizer = optim.Adam(
             model.parameters(),
             lr=cfg.TRAIN.LR
         )
 
-    return optimizer
+    elif cfg.TRAIN.OPTIMIZER == 'adamw':
+        optimizer = optim.AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=cfg.TRAIN.LR,
+            weight_decay=cfg.TRAIN.WD
+        )
 
+    return optimizer
 
 def save_checkpoint(states, is_best, output_dir,
                     filename='checkpoint.pth.tar'):
@@ -341,4 +349,58 @@ class BestModelSaver:
             print(f"✅ Best model loaded from {self.save_path}")
         return model
 
+def insert_before_bos(input_ids, input_embeddings, image_embeddings, bos_token_id, attention_mask=None, labels=None):
+    """
+    삽입 위치: BOS 토큰 앞
+    input_embeddings: (B, L, D)
+    image_embeddings: (B, D)
+    Returns: combined_embeddings, new_attention_mask, new_labels
+    """
+    B, L = input_ids.shape
+    D = input_embeddings.shape[-1]
+    device = input_ids.device
 
+    # dtype alignment
+    image_embeddings = image_embeddings.to(dtype=input_embeddings.dtype)
+
+    # BOS 위치: 각 배치에서 첫 번째 bos_token_id의 위치
+    bos_pos = (input_ids == bos_token_id).float().argmax(dim=1)  # (B,)
+
+    # 새 텐서 초기화
+    new_len = L + 1
+    new_input_embeddings = torch.zeros((B, new_len, D), dtype=input_embeddings.dtype, device=device)
+    new_attention_mask = torch.zeros((B, new_len), dtype=torch.long, device=device) if attention_mask is not None else None
+    new_labels = torch.full((B, new_len), -100, dtype=torch.long, device=device) if labels is not None else None
+
+    # 시프트 인덱스 계산
+    arange_L = torch.arange(L, device=device).unsqueeze(0).expand(B, L)
+    shifted_indices = torch.where(arange_L < bos_pos.unsqueeze(1), arange_L, arange_L + 1)  # (B, L)
+
+    # input_embeddings 채우기
+    new_input_embeddings.scatter_(1, shifted_indices.unsqueeze(-1).expand(-1, -1, D), input_embeddings)
+    new_input_embeddings[torch.arange(B), bos_pos] = image_embeddings
+
+    # attention_mask
+    if attention_mask is not None:
+        new_attention_mask.scatter_(1, shifted_indices, attention_mask)
+        new_attention_mask[torch.arange(B), bos_pos] = 1
+
+    # labels
+    if labels is not None:
+        new_labels.scatter_(1, shifted_indices, labels)
+        new_labels[torch.arange(B), bos_pos] = -100
+
+    return new_input_embeddings, new_attention_mask, new_labels
+
+
+def prepare_generate_inputs(img_token_id, bos_token_id, device, batch_size=1):
+    """
+    Returns input_ids and attention_mask shaped (B, 2) with [<img>, <bos>]
+    """
+    input_ids = torch.tensor(
+        [[bos_token_id]] * batch_size,
+        dtype=torch.long,
+        device=device
+    )
+    attention_mask = torch.ones_like(input_ids)
+    return input_ids, attention_mask
