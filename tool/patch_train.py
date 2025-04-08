@@ -101,6 +101,7 @@ def main():
     patch = cfg.MODEL.EXTRA.PATCH
     model_name = cfg.MODEL.NAME
     dataset_scale = 'large' if cfg.DATASET.PKL == 'data/pkl/output200x300.pkl' else 'small'
+    dataset_scale = 'large' if cfg.DATASET.PKL == 'data/pkl/final_output_left_right_ordered.pkl' else 'small'
 
     # Set output directories
     final_output_dir = os.path.join('output', f"twobranchModel_{timestamp}_{str_target_classes}_classifier")

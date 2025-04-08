@@ -75,8 +75,8 @@ def process_and_save(data, report_pkl_path):
         # 재정렬된 보고서 생성 (공백 하나로 구분)
         reordered_report = (
             f"[FINDING] {reordered_sections['finding']} "
-            f"[CONCLUSION] {reordered_sections['conclusion']} "
-            f"[RECOMMEND] {reordered_sections['recommend']}"
+            f"\n[CONCLUSION] {reordered_sections['conclusion']} "
+            f"\n[RECOMMEND] {reordered_sections['recommend']}"
         ).strip()
 
         # 최종 데이터 저장
