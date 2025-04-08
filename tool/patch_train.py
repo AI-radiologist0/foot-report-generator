@@ -42,7 +42,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train classification Network with feature extractor')
     # general
     parser.add_argument('--cfg',
-                        default='config/test.yaml',
+                        default='./config/large/EachExtractor-EachImages/large_abnormal_normal.yaml',
                         help='experiment configure file name',
                         required=False,
                         type=str)
