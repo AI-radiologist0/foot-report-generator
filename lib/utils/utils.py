@@ -324,6 +324,7 @@ class BestModelSaver:
             verbose (bool): 모델 저장 시 출력 여부
         """
         self.save_path = os.path.join(wandb.run.dir, save_path)
+        self.final_path = os.path.join(wandb.run.dir, "final_model.pth")
         self.best_loss = float("inf")  # 초기값은 무한대
         self.verbose = verbose
 
@@ -341,9 +342,15 @@ class BestModelSaver:
             
             if self.verbose:
                 logging.info(f"🔹 Best model saved! New best loss: {val_loss:.6f}")
+    
+    def save_final_model(self, model):
+        torch.save(model.state_dict(), self.final_path)
+        if self.verbose:
+            logging.info(f"✅ Final model saved to {self.final_path}")
 
     def load_best_model(self, model, path=None):
         """저장된 베스트 모델을 로드하는 메서드"""
+
         model.load_state_dict(torch.load(path if path is not None else self.save_path))
         if self.verbose:
             print(f"✅ Best model loaded from {self.save_path}")

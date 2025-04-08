@@ -20,6 +20,10 @@ def normalize_special_tokens(cfg, text):
     
     text = text.replace("[EOS]", "").strip()
     text = text.replace("[BOS]", "").strip()
+
+    if is_meerkat:
+        return text
+
     text = "[BOS] " + text + " [EOS]"
     
     return text
