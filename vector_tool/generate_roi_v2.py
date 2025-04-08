@@ -95,7 +95,7 @@ def process_disease_entry(entry):
 # --------- 메인 처리 루프 ---------
 
 coco_medical = COCOMedical()
-coco_medical.load_json("data/merge/output.json")
+coco_medical.load_json("data/json/merge/output.json")
 
 # 2. annotations -> Disease 객체 변환
 # annotations = coco_medical.dataset.get("annotations", [])
@@ -104,10 +104,11 @@ for idx, value in enumerate(coco_medical.diseases):
     disease_list.append(coco_medical.diseases[value].to_dict())
 
 final_data = {}
-for entry in tqdm(disease_list, desc="Processing disease entries"):
-    result = process_disease_entry(entry)
-    if result is not None:
-        final_data[result['image_id']] = result
+with tqdm(enumerate(disease_list), desc="Processing disease entries", total=len(disease_list)) as pbar:
+    for i, entry in pbar:
+        result = process_disease_entry(entry)
+        if result is not None:
+            final_data[result['image_id']] = result
 
 print(f"✅ 완료: 총 {len(final_data)}개 이미지 처리됨.")
 
