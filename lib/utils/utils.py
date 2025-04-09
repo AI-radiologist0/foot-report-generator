@@ -61,7 +61,7 @@ def create_logger(cfg, cfg_name, phase='train'):
     return logger, str(final_output_dir), str(tensorboard_log_dir)
 
 
-def count_labels(data, target_class):
+def count_labels(data, target_class, cfg):
     """
         Method: count images for each labels.
         
@@ -82,7 +82,9 @@ def count_labels(data, target_class):
 
     
     for key, entry in tqdm(data.items(), desc="counting dataset"):
-        class_label = entry.get('class', '').lower()
+        class_label = entry.get('class', "").lower() if cfg.DATASET.USE_PKL else entry.get('class_label', "").lower()
+        if class_label == "":
+            logging.warning(f"Missing class label for entry: {key}")
         if class_label in target_class and os.path.exists(entry['file_path']):
             class_counts[class_label] += 1
             data_by_class[class_label].append(entry)
@@ -140,7 +142,7 @@ def prepare_abnormal_normal_data(data, cfg):
     target_classes = abnormal_classes + normal_classes
 
     # Count labels and group data by class
-    class_counts, data_by_class = count_labels(data, target_classes)
+    class_counts, data_by_class = count_labels(data, target_classes, cfg)
     logging.info(f"Original class distribution: {class_counts}")
 
     # Combine abnormal classes into a single "abnormal" class
@@ -212,7 +214,7 @@ def prepare_data(data, target_classes, cfg, is_binary=False):
         raise ValueError("Binary classification requires exactly 2 target classes.")
 
     # Regular processing for other class combinations
-    class_counts, data_by_class = count_labels(data, target_classes)
+    class_counts, data_by_class = count_labels(data, target_classes, cfg)
     logging.info(f"Original class distribution: {class_counts}")
 
     # If neither balancing nor augmentation is enabled, return raw data

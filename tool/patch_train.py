@@ -42,7 +42,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train classification Network with feature extractor')
     # general
     parser.add_argument('--cfg',
-                        default='config/test.yaml',
+                        default='./config/large/EachExtractor-EachImages/large_gout_normal_new.yaml',
                         help='experiment configure file name',
                         required=False,
                         type=str)
@@ -150,13 +150,15 @@ def main():
         tags=["hand-arthritis", "classification(test)"]  # Optional tags
     )
 
-
-    # Data loading code
-    with open(cfg.DATASET.PKL, 'rb') as f:
-        pkl_data = pickle.load(f)
-
+    if cfg.DATASET.USE_PKL:
+        # Data loading code
+        with open(cfg.DATASET.PKL, 'rb') as f:
+            pkl_data = pickle.load(f)
+        dataset = FootPatchesDataset(cfg, pkl_data)
+    else:
+        dataset = FootPatchesDataset(cfg)
     logging.info('Dataset Loading ...')
-    dataset = FootPatchesDataset(cfg, pkl_data)
+
     train_size = int(0.7 * len(dataset))
     val_size = int(0.15 * len(dataset))
     test_size = len(dataset) - train_size - val_size

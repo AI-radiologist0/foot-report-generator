@@ -53,7 +53,7 @@ _C.DECODER.USE_LORA = True
 # DATASET related params
 _C.DATASET = CN()
 _C.DATASET.ROOT = ''
-_C.DATASET.JSON = 'data.json'
+_C.DATASET.JSON = 'data/merge/output.json'
 _C.DATASET.TRAIN_SET = 'train'
 _C.DATASET.TEST_SET = 'valid'
 _C.DATASET.DATA_FORMAT = 'jpg'
@@ -68,6 +68,7 @@ _C.DATASET.STD = [0.2194, 0.2194, 0.2194]
 _C.DATASET.TARGET_CLASSES = ['oa', 'normal']
 
 _C.DATASET.PKL = 'data/pkl/output.pkl'
+_C.DATASET.USE_PKL = True
 _C.DATASET.USE_RAW = True
 _C.DATASET.USE_PATCH = True
 _C.DATASET.REPORT = False
