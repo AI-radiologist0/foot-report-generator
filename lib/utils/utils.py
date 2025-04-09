@@ -82,7 +82,9 @@ def count_labels(data, target_class):
 
     
     for key, entry in tqdm(data.items(), desc="counting dataset"):
-        class_label = entry.get('class', '').lower()
+        class_label = entry.get('class', "").lower() if 'class' in entry.keys() else entry.get('class_label', "").lower()
+        if class_label == "":
+            logging.warning(f"Missing class label for entry: {key}")
         if class_label in target_class and os.path.exists(entry['file_path']):
             class_counts[class_label] += 1
             data_by_class[class_label].append(entry)

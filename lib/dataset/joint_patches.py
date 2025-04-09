@@ -2,10 +2,13 @@ import os
 import torch
 import concurrent.futures
 from PIL import Image
+import cv2
 import numpy as np
 from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm import tqdm
+from pycocomedical import COCOMedical
+
 
 from utils.utils import prepare_binary_data, prepare_data
 
@@ -156,16 +159,20 @@ class FootPatchesDataset(Dataset):
         if not self.use_raw and self.use_patches:
             raise AttributeError("Patches cannot be used without raw images.")
 
-        # JSON 로딩
-        with open(cfg.DATASET.JSON_PATH, "r") as f:
-            json_raw = json.load(f)
-
         # disease_list 구성
-        from pycocomedical import COCOMedical
-        coco = COCOMedical()
-        coco.dataset = json_raw
-        coco.createIndex()
-        self.data = [coco.diseases[val].to_dict() for val in coco.diseases]
+        coco_medical = COCOMedical()
+        coco_medical.load_json(cfg.DATASET.JSON)
+
+        self.data = {}
+        for idx, value in enumerate(coco_medical.diseases):
+            # self.data.append(coco_medical.diseases[value].to_dict())
+            self.data[idx] = coco_medical.diseases[value].to_dict()
+        
+        if self.is_binary:
+            balanced_data, _, _ = prepare_data(self.data, self.target_classes, cfg, self.is_binary)
+            self.data = balanced_data
+        else:
+            self.data = self.data
 
     def __len__(self):
         return len(self.data)
@@ -223,8 +230,14 @@ class FootPatchesDataset(Dataset):
                             continue
             return patches
 
-        left_patches = extract(keypoints_dict['left']) if 'left' in keypoints_dict else []
-        right_patches = extract(keypoints_dict['right']) if 'right' in keypoints_dict else []
+        left_patches, right_patches = [], []
+        if 'left' in keypoints_dict:
+            if keypoints_dict['left']:
+                left_patches = extract(keypoints_dict['left'])
+        
+        if 'right' in keypoints_dict:
+            if keypoints_dict['right']:
+                right_patches = extract(keypoints_dict['right'])
 
         if left_patches and not right_patches:
             right_patches = [cv2.flip(p, 1) for p in left_patches]
