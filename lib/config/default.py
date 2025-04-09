@@ -68,6 +68,7 @@ _C.DATASET.STD = [0.2194, 0.2194, 0.2194]
 _C.DATASET.TARGET_CLASSES = ['oa', 'normal']
 
 _C.DATASET.PKL = 'data/pkl/output.pkl'
+_C.DATASET.USE_PKL = True
 _C.DATASET.USE_RAW = True
 _C.DATASET.USE_PATCH = True
 _C.DATASET.REPORT = False
