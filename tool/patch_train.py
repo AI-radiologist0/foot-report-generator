@@ -30,7 +30,7 @@ import torchvision.transforms as transforms
 import _init_path
 from config import cfg, update_config
 from core.patch_trainer import PatchTrainer
-from dataset.joint_patches import FootPatchesDataset
+from dataset.joint_patches import FootPatchesDataset, FootPatchesDatasetWithJson
 from utils.utils import EarlyStopping, BestModelSaver
 
 import models
@@ -156,7 +156,7 @@ def main():
             pkl_data = pickle.load(f)
         dataset = FootPatchesDataset(cfg, pkl_data)
     else:
-        dataset = FootPatchesDataset(cfg)
+        dataset = FootPatchesDatasetWithJson(cfg)
     logging.info('Dataset Loading ...')
 
     train_size = int(0.7 * len(dataset))
