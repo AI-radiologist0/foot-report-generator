@@ -7,17 +7,18 @@ DATASET:
   BASIC_TRANSFORM: True
   BBOX_CROP_FLAG: False
   DATA_FORMAT: jpg
-  INCLUDE_CLASSES: ['oa', 'normal']
+  INCLUDE_CLASSES: ['ra', 'normal']
   JSON: data.json
   MEAN: [0.1147, 0.1147, 0.1147]
   PKL: data/pkl/final_output_left_right_ordered.pkl
   ROOT: 
   STD: [0.2194, 0.2194, 0.2194]
-  TARGET_CLASSES: ['oa', 'normal']
+  TARGET_CLASSES: ['ra', 'normal']
   TEST_SET: valid
   TRAIN_SET: train
   USE_PATCH: True
   USE_RAW: True
+  USE_PKL: False
 DATA_DIR: 
 DEBUG:
   DEBUG: False

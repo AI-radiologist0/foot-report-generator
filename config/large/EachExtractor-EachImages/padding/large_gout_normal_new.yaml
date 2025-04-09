@@ -7,17 +7,18 @@ DATASET:
   BASIC_TRANSFORM: True
   BBOX_CROP_FLAG: False
   DATA_FORMAT: jpg
-  INCLUDE_CLASSES: ['ra', 'normal']
+  INCLUDE_CLASSES: ['gout', 'normal']
   JSON: data.json
   MEAN: [0.1147, 0.1147, 0.1147]
   PKL: data/pkl/final_output_left_right_ordered.pkl
   ROOT: 
   STD: [0.2194, 0.2194, 0.2194]
-  TARGET_CLASSES: ['ra', 'normal']
+  TARGET_CLASSES: ['gout', 'normal']
   TEST_SET: valid
   TRAIN_SET: train
   USE_PATCH: True
   USE_RAW: True
+  USE_PKL: False
 DATA_DIR: 
 DEBUG:
   DEBUG: False
@@ -45,7 +46,7 @@ TRAIN:
   BEGIN_EPOCH: 0
   CHECKPOINT: 
   DECAY: 0.0005
-  END_EPOCH: 25
+  END_EPOCH: 50
   GAMMA1: 0.99
   GAMMA2: 0.0
   LR: 0.001

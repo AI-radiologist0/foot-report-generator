@@ -152,7 +152,7 @@ class DecoderWithImageEmbedding(nn.Module):
                 )
 
             input_embeddings = self.get_input_embeddings()(input_ids)
-
+            
             combined_embeddings, new_attention_mask, _ = insert_before_bos(
                 input_ids=input_ids,
                 input_embeddings=input_embeddings,

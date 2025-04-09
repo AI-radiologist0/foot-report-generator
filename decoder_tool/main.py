@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, random_split
 
 import _init_path
 from config import cfg, update_config
-from dataset.joint_patches import FootPatchesDataset
+from dataset.joint_patches import FootPatchesDataset, FootPatchesDatasetWithJson
 from utils.collate_fn import TokenizedReportCollateFn
 from utils.tokenizer import load_and_prepare_tokenizer
 from utils.utils import EarlyStopping, BestModelSaver, get_optimizer
