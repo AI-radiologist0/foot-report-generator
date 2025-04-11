@@ -33,6 +33,15 @@ feature_extractor.USE_CKPT = False
 feature_extractor.FREEZE = True
 feature_extractor.CLASSIFIER_HEAD = False
 
+feature_extractor2 = CN(new_allowed=True)
+feature_extractor2.RAW = 'swin-t'
+feature_extractor2.PATCH = 'Resnet'
+feature_extractor2.CKPT = 'wandb/run-ra-binary-classifier/files/best_model.pth'
+feature_extractor2.USE_CKPT = False
+feature_extractor2.FREEZE = True
+feature_extractor2.CLASSIFIER_HEAD = False
+
+
 # Add GPT-2 Configuration
 GPT2 = CN(new_allowed=True)
 GPT2.MODEL_SIZE = 'small'  # Options: 'small', 'medium'
@@ -49,5 +58,6 @@ MODEL_EXTRAS = {
     'VGG19': VGG19,
     'YOLOv5': YOLOv5,
     'feature_extractor': feature_extractor,
+    'feature_extractor2': feature_extractor2,
     'GPT2': GPT2,  # New GPT-2 configuration
 }

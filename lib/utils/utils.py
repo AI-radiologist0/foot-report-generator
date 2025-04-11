@@ -241,7 +241,6 @@ def prepare_data(data, target_classes, cfg, is_binary=False):
         logging.info("Applied data augmentation: dataset size doubled.")
 
     return balanced_data, class_counts, final_counts
-    
 
 def get_optimizer(cfg, model):
     optimizer = None
@@ -355,7 +354,7 @@ class BestModelSaver:
 
         model.load_state_dict(torch.load(path if path is not None else self.save_path))
         if self.verbose:
-            print(f"✅ Best model loaded from {self.save_path}")
+            print(f"✅ Best model loaded from {path if path is not None else self.save_path}")
         return model
 
 def insert_before_bos(input_ids, input_embeddings, image_embeddings, bos_token_id, attention_mask=None, labels=None):

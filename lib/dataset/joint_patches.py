@@ -77,11 +77,18 @@ class FootPatchesDataset(Dataset):
         - 패치 이미지 (최대 34개, 부족하면 Zero Padding)
         - 레이블 (이진 분류 & 다중 분류 자동 적용)
         """
+
+        meta = {}
+
         entry = self.data[idx]
-        file_path = entry['file_path']            
+        file_path = entry['file_path']
         label = self.target_classes.index(self.abnormal_mapping[entry['class'].lower()]) if self.abnormal_mapping else self.target_classes.index(entry['class'].lower()) # 정수형 라벨 변환
         patches = entry.get("bbx", [])  # 패치 정보 가져오기
         report = entry.get("diagnosis", None)  # 보고서 정보 
+
+        meta['original_label'] = entry['class'].lower()
+        meta['label'] = label
+        meta['patient_id'] = entry['patient_id']
 
         # **Lazy Load: 원본 이미지 로드**
         image = Image.open(file_path).convert("RGB")
@@ -110,7 +117,7 @@ class FootPatchesDataset(Dataset):
 
         if self.use_report:
             return image, patch_tensor, label, report
-        return image, patch_tensor, label
+        return image, patch_tensor, label, meta
 
 class FootPatchesDatasetWithJson(Dataset):
     def __init__(self, cfg, image_transform=train_transform, patch_transform=patch_transform):

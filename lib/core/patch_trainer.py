@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
-from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import logging
 import time
 
@@ -56,7 +56,7 @@ class PatchTrainer:
 
         with tqdm(enumerate(data_loader), desc="Training", total=len(data_loader)) as pbar:
             
-            for i, (images, patches, labels) in pbar:
+            for i, (images, patches, labels, meta) in pbar:
                 data_time.update(time.time() - end)
                 images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
 
@@ -123,7 +123,7 @@ class PatchTrainer:
         all_probs = []
 
         with torch.no_grad():
-            for images, patches, labels in tqdm(val_loader):
+            for images, patches, labels, meta in tqdm(val_loader):
                 images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
 
                 # 🔹 이진 분류(BCE) vs 다중 분류(CE) 적용
@@ -178,3 +178,74 @@ class PatchTrainer:
         logger.info(f'[Epoch {epoch}] Precision: {precision:.4f} \t Recall: {recall:.4f} \t F1 Score: {f1:.4f}')
 
         return accuracies.avg * 100, losses.avg, precision, recall, f1
+
+    def inference(self, epoch, model, dataloader, device, criterion=None, writer_dict=None):
+        model.eval()
+        model.to(device)
+
+        if not criterion:
+            criterion = self.criterion
+
+        losses = AverageMeter()
+        accuracies = AverageMeter()
+        all_preds = []
+        all_labels = []
+        all_probs = []
+
+        with torch.no_grad():
+            for image, patch, label, meta in tqdm(dataloader, desc='[Inference]'):
+                image, patch, label = image.to(device), patch.to(device), label.to(device)
+
+                if self.is_binary:
+                    label = label.float()
+                    output = model(image, patch)
+                    prob = output
+                    pred = (prob > 0.5).float()
+                else:
+                    label = label.long()
+                    output = model(image, patch)
+                    prob = F.softmax(output, dim=1)
+                    pred = torch.argmax(prob, dim=1)
+
+                loss = criterion(output, label)
+                losses.update(loss.item(), image.size(0))
+
+                correct = (pred == label).sum().item()
+                total = label.size(0)
+                accuracy = correct / total
+                accuracies.update(accuracy, total)
+
+                all_probs.extend(prob.cpu().numpy())
+                all_preds.extend(pred.cpu().numpy())
+                all_labels.extend(label.cpu().numpy())
+
+        # Metric 계산
+        if self.is_binary:
+            precision = precision_score(all_labels, all_preds, average='binary', zero_division=0)
+            recall = recall_score(all_labels, all_preds, average='binary', zero_division=0)
+            f1 = f1_score(all_labels, all_preds, average='binary', zero_division=0)
+        else:
+            precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+            recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+            f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+
+        # TensorBoard 기록
+        if writer_dict:
+            writer = writer_dict['writer']
+            global_steps = writer_dict['valid_global_steps']
+            writer.add_scalar('inference_loss', losses.avg, global_steps)
+            writer.add_scalar('inference_acc', accuracies.avg * 100, global_steps)
+            writer.add_scalar('inference_precision', precision, global_steps)
+            writer.add_scalar('inference_recall', recall, global_steps)
+            writer.add_scalar('inference_f1', f1, global_steps)
+            writer_dict['valid_global_steps'] = global_steps + 1
+
+        metrics = {
+            'accuracy': accuracies.avg,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'loss': losses.avg
+        }
+
+        return metrics, all_preds, all_labels
