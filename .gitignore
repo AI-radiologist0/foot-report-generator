@@ -133,3 +133,5 @@ dmypy.json
 checkpoint/
 logs/
 results/
+
+cleaned_report/
