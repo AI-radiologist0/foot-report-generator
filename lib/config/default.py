@@ -25,6 +25,7 @@ _C.WORKERS = 4
 _C.PHASE = 'train'
 _C.DEVICE = "GPU"
 _C.PRINT_FREQ = 1
+_C.PRINT_SAMPLE_FREQ = 5
 
 
 # Cudnn related params
@@ -47,6 +48,9 @@ _C.DECODER.EXTRA = MODEL_EXTRAS[_C.DECODER.NAME]
 _C.DECODER.INIT_WEIGHTS = True
 _C.DECODER.PRETRAINED = True
 _C.DECODER.USE_LORA = True
+_C.DECODER.FLAMINGO = CN()
+_C.DECODER.FLAMINGO.USE_FLAMINGO = False
+_C.DECODER.FLAMINGO.ADAPTER_LAYERS= [4, 8, 10]
 
 # if you want to add new params for NETWORK, Init new Params below!
 
