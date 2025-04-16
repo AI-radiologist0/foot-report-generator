@@ -55,7 +55,7 @@ def initialize_logger(output_dir):
 def main():
     # Argument parser for configuration file
     parser = argparse.ArgumentParser(description="Training pipeline for Foot Report Generator")
-    parser.add_argument('--cfg', type=str, default='config/decoder/train_decoder_meerkat.yaml', required=False, help='Path to the configuration file')
+    parser.add_argument('--cfg', type=str, default='config/decoder/train_decoder_wo_LoRA_unfrozen_fe.yaml', required=False, help='Path to the configuration file')
     args = parser.parse_args()
 
     # Update configuration
@@ -112,11 +112,16 @@ def main():
     )
     
     # Load dataset
-    with open(cfg.DATASET.PKL, 'rb') as f:
-        pkl_data = pickle.load(f)
+    if cfg.DATASET.USE_PKL:
+        with open(cfg.DATASET.PKL, 'rb') as f:
+            pkl_data = pickle.load(f)
 
-    dataset = FootPatchesDataset(cfg, pkl_data)
-    collate_fn = TokenizedReportCollateFn(tokenizer, cfg, max_length=cfg.DECODER.EXTRA.MAX_SEQ_LENGTH, save_path='./meerkat_token.txt')
+        dataset = FootPatchesDataset(cfg, pkl_data)
+        collate_fn = TokenizedReportCollateFn(tokenizer, cfg, max_length=cfg.DECODER.EXTRA.MAX_SEQ_LENGTH, save_path='./meerkat_token.txt')
+    else:
+        dataset = FootPatchesDatasetWithJson(cfg)
+        collate_fn = TokenizedReportCollateFn(tokenizer, cfg, max_length=cfg.DECODER.EXTRA.MAX_SEQ_LENGTH, save_path='./meerkat_token.txt')
+
 
     # Split dataset into train, validation, and test sets
     train_size = int(0.7 * len(dataset))
@@ -131,16 +136,19 @@ def main():
     logger.info("Dataset split into train, validation, and test sets.")
 
     # Load feature extractor model
-    feature_extractor_name = cfg.MODEL.NAME
-    feature_extractor = eval('models.' + feature_extractor_name + '.get_feature_extractor')(
-        cfg, is_train=True, remove_classifier=True
-    )
-    feature_extractor = feature_extractor.to(device)
-    logger.info("Feature extractor model loaded.")
+    if cfg.MODEL.EXTRA.FREEZE == False and cfg.DECODER.USE_LORA == False:
+        feature_extractor = None
+    else:
+        feature_extractor_name = cfg.MODEL.NAME
+        feature_extractor = eval('models.' + feature_extractor_name + '.get_feature_extractor')(
+            cfg, is_train=True, remove_classifier=True
+        )
+        feature_extractor = feature_extractor.to(device)
+        logger.info("Feature extractor model loaded.")
 
     # Initialize decoder model (will be reloaded later in test phase if needed)
     decoder_model = get_decoder(cfg, tokenizer, model_name=decoder_huggingface_name)
-    # decoder_model = decoder_model.to(device)
+    decoder_model = decoder_model.to(device)
     logger.info(f"Decoder Model Class: {type(decoder_model)} on {decoder_huggingface_name}")
 
     # Decoder Trainer
@@ -155,11 +163,11 @@ def main():
         train_loss = trainer.train(epoch, train_loader, optimizer)
         val_loss = trainer.validate(epoch, val_loader)
 
-        if epoch % cfg.PRINT_FREQ == 0:
-            bleu, rouge, bert, predictions = trainer.inference(epoch, val_loader)
+        if epoch % cfg.PRINT_SAMPLE_FREQ == 0:
+            bleu, rouge, bert, semantic, tfidf, predictions = trainer.inference(epoch, val_loader)
             if predictions:
                 data = []
-                columns = ["sample_id", "reference", "prediction", "bleu_score", "ROUGE-L", "BERTSCORE", ]
+                columns = ["sample_id", "reference", "prediction", "bleu_score", "ROUGE-L", "BERTSCORE", "Semantic_Score", "TF-IDF"]
                 for i, sample in enumerate(predictions):
                     data.append([
                         i, 
@@ -168,9 +176,11 @@ def main():
                         sample['bleu_score'],
                         sample['rouge_l'], 
                         sample['bert_f1'],
+                        sample['semantic'], 
+                        sample['tfidf']
                     ])
                 wandb.log({"sample_predictions": wandb.Table(columns=columns, data=data)})
-            wandb.log({"BLUE": bleu, "ROUGE": rouge, "bert": bert})
+            wandb.log({"BLUE": bleu, "ROUGE": rouge, "bert": bert, "Semantic_Score": semantic, "TF-idf": tfidf})
             logger.info(f"Inference Step {epoch}: BLEU_SCORE = {bleu:.4f} ROUGE = {rouge:.4f} BERT = {bert:.4f}")
 
         logger.info(f"Epoch {epoch}: Train Loss = {train_loss:.4f}, Validation Loss = {val_loss:.4f}")
@@ -195,21 +205,24 @@ def main():
     trainer = DecoderTrainer(cfg, decoder_model, tokenizer, feature_extractor, writer_dict=writer_dict)
     logger.info("Best model loaded after training for testing.")
     
-    bleu, rouge, bert, predictions = trainer.inference(epoch, test_loader)
+    bleu, rouge, bert, semantic, tfidf, predictions = trainer.inference(epoch, test_loader)
     if predictions:
         data = []
-        columns = ["sample_id", "reference", "prediction", "bleu_score", "ROUGE-L", "BERTSCORE", ]
+        columns = ["sample_id", "reference", "prediction", "bleu_score", "ROUGE-L", "BERTSCORE", "Semantic_Score", "tfidf"]
         for i, sample in enumerate(predictions):
             data.append([
-                i, 
-                sample['reference'], 
-                sample['prediction'], 
-                sample['bleu_score'],
-                sample['rouge_l'], 
-                sample['bert_f1'],
+                        i, 
+                        sample['reference'], 
+                        sample['prediction'], 
+                        sample['bleu_score'],
+                        sample['rouge_l'], 
+                        sample['bert_f1'],
+                        sample['semantic'], 
+                        sample['tfidf']
             ])
         wandb.log({"sample_predictions(TEST)": wandb.Table(columns=columns, data=data)})
-    wandb.log({"bleu(TEST)": bleu, "rouge(TEST)": rouge, "bert(TEST)": bert})
+    wandb.log({"bleu(TEST)": bleu, "rouge(TEST)": rouge, "bert(TEST)": bert, "Semantic(TEST)":semantic, "TF-IDF":tfidf})
+
     logger.info(f"BLEU Score(TEST) = {bleu:.4f}")
 
     # Finish Wandb run
