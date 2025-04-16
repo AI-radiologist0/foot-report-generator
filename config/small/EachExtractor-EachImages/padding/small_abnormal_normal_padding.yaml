@@ -10,7 +10,7 @@ DATASET:
   INCLUDE_CLASSES: ['abnormal', 'normal']
   JSON: data.json
   MEAN: [0.1147, 0.1147, 0.1147]
-  PKL: data/pkl/output200x300.pkl
+  PKL: data/pkl/output200x300_2423.pkl
   ROOT: 
   STD: [0.2194, 0.2194, 0.2194]
   TARGET_CLASSES: ['abnormal', 'normal']
@@ -41,7 +41,7 @@ TEST:
   BATCH_SIZE_PER_GPU: 32
   TEST_SET_RATIO: 0.15
 TRAIN:
-  BATCH_SIZE_PER_GPU: 64
+  BATCH_SIZE_PER_GPU: 32
   BEGIN_EPOCH: 0
   CHECKPOINT: 
   DECAY: 0.0005
