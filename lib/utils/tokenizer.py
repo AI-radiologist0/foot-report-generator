@@ -9,22 +9,24 @@ def load_and_prepare_tokenizer(model_name: str, additional_special_tokens=None):
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if not is_meerkat:
-        if tokenizer.pad_token != "[PAD]":
-            tokenizer.pad_token({'pad_token': '[PAD]'})
-            logger.info("Added [PAD] token to tokenizer.")
+        # if tokenizer.pad_token != "[PAD]":
+        #     tokenizer.pad_token({'pad_token': '[PAD]'})
+        #     logger.info("Added [PAD] token to tokenizer.")
+        if tokenizer.pad_token is None:
+            tokenizer.add_special_tokens({'pad_token':'[PAD]'})
 
-        if tokenizer.eos_token != "[EOS]":
+        if tokenizer.eos_token is None:
             tokenizer.add_special_tokens({'eos_token': '[EOS]'})
             logger.info("Added [EOS] token to tokenizer.")
 
-        if tokenizer.bos_token != "[BOS]":
+        if tokenizer.bos_token is None:
             tokenizer.add_special_tokens({'bos_token': '[BOS]'})
             logger.info("Added [BOS] token to tokenizer.")
 
     if additional_special_tokens is not None:
         tokenizer.add_special_tokens({'additional_special_tokens': additional_special_tokens})
 
-    tokenizer.padding_side = "left"
+    # tokenizer.padding_side = "left"
 
     # Logging Special Token IDs.
     logger.info(f"Special Tokens: {tokenizer.special_tokens_map}")

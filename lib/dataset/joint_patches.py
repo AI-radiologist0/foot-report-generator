@@ -1,5 +1,6 @@
 import os
 import json, re
+import unicodedata
 import torch
 import concurrent.futures
 from PIL import Image
@@ -107,7 +108,8 @@ class FootPatchesDataset(Dataset):
             patch_tensors.extend(padding)
 
         # **패치 텐서 병합 (최종 Shape: (34*3, 112, 112))**
-        patch_tensor = torch.cat(patch_tensors, dim=0) if patch_tensors else torch.zeros(34 * 3, 112, 112)
+        patch_tensor = torch.stack(patch_tensors, dim=0) if patch_tensors else torch.zero(34, 3, 112, 112)
+        # patch_tensor = torch.cat(patch_tensors, dim=0) if patch_tensors else torch.zeros(34 * 3, 112, 112)
 
         # **Binary vs Multi-class 레이블 변환**
         if self.is_binary:
@@ -190,7 +192,8 @@ class FootPatchesDatasetWithJson(Dataset):
 
         # Transform patches
         patch_tensors = [self.patch_transform(Image.fromarray(p)) for p in patches]
-        patch_tensor = torch.cat(patch_tensors, dim=0)
+        patch_tensor = torch.stack(patch_tensors, dim=0) if patch_tensors else torch.zero(34, 3, 112, 112)
+        # patch_tensor = torch.cat(patch_tensors, dim=0)
 
         if self.is_binary:
             label = torch.tensor(label, dtype=torch.float32).unsqueeze(0)
@@ -253,9 +256,34 @@ class FootPatchesDatasetWithJson(Dataset):
         right_patches = pad(right_patches)
         return left_patches + right_patches
 
-    def _clean_report(self, report):
-        if not report:
-            return ""
-        report = re.sub(r"_x000D_", "\n", report)
-        report = report.replace("\r", "").strip()
-        return report
+    def _clean_report(self, text):
+        # Normalize and remove non-ASCII characters.
+        text = unicodedata.normalize('NFKC', text)
+        text = re.sub(r'[^\x00-\x7F]+', ' ', text)
+        text = re.sub(r'([.!?]){2,}', r'\1', text)
+        text = re.sub(r'\[\s*finding\s*\]', '[FINDING]', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[\s*conclusion\s*\]', '[CONCLUSION]', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[\s*diagnosis\s*\]', '[DIAGNOSIS]', text, flags=re.IGNORECASE)
+        parts = re.split(r'\[\s*recommend(?:ation)?\s*\]', text, flags=re.IGNORECASE)
+        text = parts[0]
+        text = text.replace('_x000D_', ' ')
+        text = re.sub(r'\s+', ' ', text).strip()
+        if text and not text.endswith(self.eos_token):
+            text += ' ' + self.eos_token
+
+        cleaned = re.sub(r'\[\s*(FINDING|DIAGNOSIS|CONCLUSION)\s*\]', '', text, flags=re.IGNORECASE).strip()
+        cleaned = cleaned.replace(self.eos_token, '').strip()
+
+        sentences = [s.strip() for s in re.split(r'\.\s*', cleaned) if s.strip()]
+        N = len(sentences)
+        if N % 2 == 0 and N > 0:
+            half = N // 2
+            if all(sentences[i].lower() == sentences[i + half].lower() for i in range(half)):
+                final_text = '. '.join(sentences[:half]) + '.'
+            else:
+                final_text = '. '.join(sentences) + '.'
+        else:
+            final_text = '. '.join(sentences) + '.'
+
+        final_text = final_text.strip() + ' ' + self.eos_token
+        return final_text

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 def create_swin_model(variant, pretrained):
     model = timm.create_model(variant, pretrained=pretrained)
-    model.head = nn.Identity()
+    # model.head = nn.Identity()
     return model, model.num_features
 
 def create_resnet_model(pretrained, in_channels=3):
@@ -26,7 +26,7 @@ def get_model(cfg, pretrained=True):
     if raw_type == 'swin-t':
         global_model, global_dim = create_swin_model('swin_tiny_patch4_window7_224', pretrained)
     elif raw_type == 'resnet':
-        global_model, global_dim = create_resnet_model(pretrained, in_channels=102)
+        global_model, global_dim = create_resnet_model(pretrained, in_channels=3)
     else:
         raise ValueError(f"Unsupported RAW model type: {raw_type}")
 
@@ -34,7 +34,7 @@ def get_model(cfg, pretrained=True):
     if patch_type == 'swin-t':
         local_model, local_dim = create_swin_model('swin_tiny_patch4_window7_224', pretrained)
     elif patch_type == 'resnet':
-        local_model, local_dim = create_resnet_model(pretrained, in_channels=102)
+        local_model, local_dim = create_resnet_model(pretrained, in_channels=3)
     else:
         raise ValueError(f"Unsupported PATCH model type: {patch_type}")
 
@@ -91,17 +91,32 @@ class FeatureExtractor(nn.Module):
             global_features = global_features.mean(dim=1)  # Pool over tokens
         else:
             raise ValueError(f"Unexpected feature dimension: {global_features.shape}")
-
+        
+        global_features = global_features.unsqueeze(1)  # Add an extra dimension for batch size
+        
+        
         # Extract local features (ResNet for patches)
+        if patches.ndim == 4:
+            # Single patch image per sample
+            B, C, H, W = patches.size()
+            N = 1
+            patches = patches.unsqueeze(1)  # (B, 1, C, H, W)로 변환
+        else:
+            B, N, C, H, W = patches.size()
+        patches = patches.view(B * N, C, H, W)  # Reshape patches to (B*N, C, H, W)
         local_features = self.local_branch(patches)
-        local_features = local_features.view(local_features.size(0), -1)  # Flatten
-
+        local_features = local_features.view(B, N, -1)  # Reshape back to (B, N, feature_dim)
+        
         # Ensure both feature tensors have the same batch dimension
         combined_features = torch.cat((global_features, local_features), dim=1)
         
         if self.classifier is None:
             return combined_features
 
+        # 기존 분류 목적 분기 유지
+        combined_features = torch.cat((global_features.squeeze(1), local_features.mean(dim=1)), dim=1)
+        # Apply the classifier (assuming self.classifier is defined elsewhere in your code)
+        # combined_features = self.classifier(combined_features)
         if self.is_binary:
             return torch.sigmoid(self.classifier(combined_features))
         

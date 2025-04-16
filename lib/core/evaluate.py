@@ -10,10 +10,15 @@ from __future__ import print_function
 
 import numpy as np
 
+from torch import nn
 from core.inference import get_max_preds
 from nltk.translate.bleu_score import sentence_bleu
 from rouge_score import rouge_scorer
 import bert_score
+from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
 
 
 def calc_dists(preds, target, normalize):
@@ -109,3 +114,34 @@ def compute_bleu_rouge(reference, prediction):
 def compute_bertscore(predictions, references, lang="en"):
     P, R, F1 = bert_score.score(predictions, references, lang=lang, verbose=False)
     return F1.tolist()  # 각 쌍별 F1 점수 리스트 반환
+
+
+def compute_semantic_similarity(generated_texts, ground_truth_texts):
+    """
+    Compute average cosine similarity between sentence embeddings.
+    """
+    st_model = SentenceTransformer('all-MiniLM-L6-v2')
+    gen_emb = st_model.encode(generated_texts, convert_to_tensor=True)
+    gt_emb = st_model.encode(ground_truth_texts, convert_to_tensor=True)
+
+    # element-wise cosine similarity per sample
+    cosine_sim = nn.functional.cosine_similarity(gen_emb, gt_emb)
+    score = cosine_sim.mean().item()
+
+    return cosine_sim.tolist(), score
+
+
+def compute_tfidf_similarity(generated_texts, ground_truth_texts):
+    """
+    Compute average cosine similarity between TF-IDF representations.
+    """
+    vectorizer = TfidfVectorizer().fit(generated_texts + ground_truth_texts)
+    gen_tfidf = vectorizer.transform(generated_texts)
+    gt_tfidf = vectorizer.transform(ground_truth_texts)
+
+    similarities = []
+    for i in range(len(generated_texts)):
+        sim = cosine_similarity(gen_tfidf[i], gt_tfidf[i])
+        similarities.append(sim[0][0])
+    
+    return similarities, np.mean(similarities)

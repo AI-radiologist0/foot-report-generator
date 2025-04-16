@@ -1,4 +1,5 @@
 import re
+import unicodedata
 import torch
 
 def normalize_special_tokens(cfg, text):
@@ -21,12 +22,11 @@ def normalize_special_tokens(cfg, text):
     text = text.replace("[EOS]", "").strip()
     text = text.replace("[BOS]", "").strip()
 
-    if is_meerkat:
-        return text
-
-    text = "[BOS] " + text + " [EOS]"
+    # text = "[BOS] " + text + " [EOS]"
     
     return text
+
+
 
 # TokenizedReportCollateFn 클래스 정의
 # 데이터 배치(batch)를 처리하고 토큰화된 보고서를 생성하는 데 사용됩니다.
@@ -41,8 +41,40 @@ class TokenizedReportCollateFn:
         self.tokenizer = tokenizer  # 토큰화를 처리할 tokenizer
         self.max_length = max_length  # 토큰화된 텍스트의 최대 길이
         self.save_path = save_path  # 토큰화된 보고서를 저장할 경로
+        self.eos_token = self.tokenizer.eos_token
         self.cfg = cfg
 
+    def _clean_report(self, text):
+        # Normalize and remove non-ASCII characters.
+        text = unicodedata.normalize('NFKC', text)
+        text = re.sub(r'[^\x00-\x7F]+', ' ', text)
+        text = re.sub(r'([.!?]){2,}', r'\1', text)
+        text = re.sub(r'\[\s*finding\s*\]', '[FINDING]', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[\s*conclusion\s*\]', '[CONCLUSION]', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[\s*diagnosis\s*\]', '[DIAGNOSIS]', text, flags=re.IGNORECASE)
+        parts = re.split(r'\[\s*recommend(?:ation)?\s*\]', text, flags=re.IGNORECASE)
+        text = parts[0]
+        text = text.replace('_x000D_', ' ')
+        text = re.sub(r'\s+', ' ', text).strip()
+        if text and not text.endswith(self.eos_token):
+            text += ' ' + self.eos_token
+
+        cleaned = re.sub(r'\[\s*(FINDING|DIAGNOSIS|CONCLUSION)\s*\]', '', text, flags=re.IGNORECASE).strip()
+        cleaned = cleaned.replace(self.eos_token, '').strip()
+
+        sentences = [s.strip() for s in re.split(r'\.\s*', cleaned) if s.strip()]
+        N = len(sentences)
+        if N % 2 == 0 and N > 0:
+            half = N // 2
+            if all(sentences[i].lower() == sentences[i + half].lower() for i in range(half)):
+                final_text = '. '.join(sentences[:half]) + '.'
+            else:
+                final_text = '. '.join(sentences) + '.'
+        else:
+            final_text = '. '.join(sentences) + '.'
+
+        final_text = final_text.strip() + ' ' + self.eos_token
+        return final_text
 
     def __call__(self, batch):
         """
@@ -61,7 +93,8 @@ class TokenizedReportCollateFn:
         # patch_tensors를 하나로 스택(stack)하여 배치 텐서로 변환
         patch_tensors = torch.stack(patch_tensors)
 
-        cleaned_reports = [normalize_special_tokens(self.cfg, report) for report in reports]
+        # cleaned_reports = [normalize_special_tokens(self.cfg, report) for report in reports]
+        cleaned_reports = [self._clean_report(report) for report in reports]
 
         # 보고서를 토큰화(tokenization)하여 토큰 ID와 어텐션 마스크 생성
         tokenized_reports = self.tokenizer(
