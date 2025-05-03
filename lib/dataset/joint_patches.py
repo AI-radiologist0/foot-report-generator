@@ -287,3 +287,198 @@ class FootPatchesDatasetWithJson(Dataset):
 
         final_text = final_text.strip() + ' ' + self.eos_token
         return final_text
+    
+
+class FinalSamplesDataset(Dataset):
+    def __init__(self, cfg, image_transform=train_transform, patch_transform=patch_transform):
+        """
+        Final Samples JSON 기반 Lazy Loading Dataset
+        """
+        self.cfg = cfg
+        self.image_transform = image_transform
+        self.patch_transform = patch_transform
+
+        self.use_raw = cfg.DATASET.USE_RAW
+        self.use_patches = cfg.DATASET.USE_PATCH
+        self.target_classes = cfg.DATASET.TARGET_CLASSES
+        self.use_report = cfg.DATASET.REPORT
+
+        if isinstance(self.target_classes, str):
+            self.target_classes = self.target_classes.split(",")
+
+        if not isinstance(self.target_classes, list):
+            raise TypeError(f"Expected list for target_classes, but got {type(self.target_classes)}")
+
+        self.is_binary = len(self.target_classes) == 2
+        self.abnormal_classify = self.is_binary and 'abnormal' in self.target_classes
+
+        if self.abnormal_classify:
+            self.abnormal_mapping = {'ra': 'abnormal', 'oa': 'abnormal', 'gout': 'abnormal', 'normal': 'normal'}
+        else:
+            self.abnormal_mapping = None
+
+        # -------------------------------
+        # JSON 데이터 로드
+        # -------------------------------
+        with open(cfg.DATASET.JSON, 'r') as f:
+            json_data = json.load(f)
+
+        # JSON -> 내부 데이터 포맷 변환
+        self.data = {}
+        for idx, item in enumerate(json_data):
+            class_label = item.get('class', 'unknown')
+            if self.abnormal_mapping:
+                class_label = self.abnormal_mapping.get(class_label.lower(), class_label.lower())
+
+            self.data[idx] = {
+                "file_path": item["merged_image_path"],
+                "left_right_file_path": item["file_paths"],  # 추가!
+                "class_label": class_label,
+                "diagnosis": item.get("diagnosis", ""),
+                "keypoints": item.get("keypoints", {})  # left/right 모두
+            }
+        
+        # prepare_data 적용
+        if self.is_binary:
+            balanced_data, _, _ = prepare_data(self.data, self.target_classes, cfg, self.is_binary)
+            self.data = balanced_data
+        else:
+            self.data = self.data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        entry = self.data[idx]
+
+        # 전체 이미지 (merged)
+        image = Image.open(entry['file_path']).convert("RGB")
+        image = self.image_transform(image)
+
+        # patches는 따로 생성
+        patches = self.generate_patches_from_file_paths(
+            entry['left_right_file_path'],
+            entry['keypoints']
+        )
+
+        # patch transform
+        patch_tensors = [self.patch_transform(Image.fromarray(p)) for p in patches]
+        patch_tensor = torch.stack(patch_tensors, dim=0) if patch_tensors else torch.zeros(34, 3, 112, 112)
+
+        # 레이블 변환
+        label_str = self.abnormal_mapping[entry['class_label'].lower()] if self.abnormal_mapping else entry['class_label'].lower()
+        label = self.target_classes.index(label_str)
+
+        if self.is_binary:
+            label = torch.tensor(label, dtype=torch.float32).unsqueeze(0)
+        else:
+            label = torch.tensor(label, dtype=torch.long)
+
+        # 리포트
+        report = self._clean_report(entry.get("diagnosis", ""))
+
+        if self.use_report:
+            return image, patch_tensor, label, report
+        return image, patch_tensor, label
+
+    def generate_patches_from_file_paths(self, file_paths, keypoints_dict, crop_size=(200, 300), patch_size=(224, 224)):
+        def extract(image, keypoints_side):
+            patches = []
+            keypoints = keypoints_side[0]['keypoints']
+            for i in range(17):
+                x, y, score = int(keypoints[i * 3]), int(keypoints[i * 3 + 1]), keypoints[i * 3 + 2]
+                if score > 0.0:
+                    x_min = max(x - crop_size[0] // 2, 0)
+                    y_min = max(y - crop_size[1] // 2, 0)
+                    x_max = min(x + crop_size[0] // 2, image.shape[1])
+                    y_max = min(y + crop_size[1] // 2, image.shape[0])
+                    crop = image[y_min:y_max, x_min:x_max]
+                    if crop.size > 0:
+                        try:
+                            resized = cv2.resize(crop, patch_size)
+                            patches.append(resized)
+                        except:
+                            continue
+            return patches
+
+        def pad(patches):
+            black = np.zeros((patch_size[1], patch_size[0], 3), dtype=np.uint8)
+            while len(patches) < 17:
+                patches.append(black)
+            return patches[:17]
+
+        left_patches, right_patches = [], []
+
+        if len(file_paths) == 1:
+            # merged image 하나
+            image = cv2.imread(file_paths[0])
+            if image is None:
+                raise FileNotFoundError(f"Cannot read image at {file_paths[0]}")
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            if 'left' in keypoints_dict and keypoints_dict['left']:
+                left_patches = extract(image, keypoints_dict['left'])
+
+            if 'right' in keypoints_dict and keypoints_dict['right']:
+                right_patches = extract(image, keypoints_dict['right'])
+
+        elif len(file_paths) == 2:
+            # left image
+            left_image = cv2.imread(file_paths[0])
+            if left_image is None:
+                raise FileNotFoundError(f"Cannot read left image at {file_paths[0]}")
+            left_image = cv2.cvtColor(left_image, cv2.COLOR_BGR2RGB)
+
+            # right image
+            right_image = cv2.imread(file_paths[1])
+            if right_image is None:
+                raise FileNotFoundError(f"Cannot read right image at {file_paths[1]}")
+            right_image = cv2.cvtColor(right_image, cv2.COLOR_BGR2RGB)
+
+            if 'left' in keypoints_dict and keypoints_dict['left']:
+                left_patches = extract(left_image, keypoints_dict['left'])
+
+            if 'right' in keypoints_dict and keypoints_dict['right']:
+                right_patches = extract(right_image, keypoints_dict['right'])
+
+        # fallback 처리
+        if left_patches and not right_patches:
+            right_patches = [cv2.flip(p, 1) for p in left_patches]
+        elif right_patches and not left_patches:
+            left_patches = [cv2.flip(p, 1) for p in right_patches]
+        elif not left_patches and not right_patches:
+            black = np.zeros((patch_size[1], patch_size[0], 3), dtype=np.uint8)
+            return [black] * 34
+
+        left_patches = pad(left_patches)
+        right_patches = pad(right_patches)
+
+        return left_patches + right_patches
+
+
+
+    def _clean_report(self, text):
+        import re, unicodedata
+        eos_token = "<eos>"
+        text = unicodedata.normalize('NFKC', text)
+        text = re.sub(r'[^\x00-\x7F]+', ' ', text)
+        text = re.sub(r'([.!?]){2,}', r'\1', text)
+        text = re.sub(r'\[\s*finding\s*\]', '[FINDING]', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[\s*conclusion\s*\]', '[CONCLUSION]', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[\s*diagnosis\s*\]', '[DIAGNOSIS]', text, flags=re.IGNORECASE)
+        parts = re.split(r'\[\s*recommend(?:ation)?\s*\]', text, flags=re.IGNORECASE)
+        text = parts[0]
+        text = text.replace('_x000D_', ' ')
+        text = re.sub(r'\s+', ' ', text).strip()
+        if text and not text.endswith(eos_token):
+            text += ' ' + eos_token
+
+        cleaned = re.sub(r'\[\s*(FINDING|DIAGNOSIS|CONCLUSION)\s*\]', '', text, flags=re.IGNORECASE).strip()
+        cleaned = cleaned.replace(eos_token, '').strip()
+
+        sentences = [s.strip() for s in re.split(r'\.\s*', cleaned) if s.strip()]
+        if len(sentences) % 2 == 0 and all(sentences[i].lower() == sentences[i + len(sentences)//2].lower() for i in range(len(sentences)//2)):
+            sentences = sentences[:len(sentences)//2]
+        final_text = '. '.join(sentences) + '.'
+        final_text = final_text.strip() + ' ' + eos_token
+        return final_text
