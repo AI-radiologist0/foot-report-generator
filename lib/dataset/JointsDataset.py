@@ -141,7 +141,9 @@ class JointsDataset(Dataset):
             'scale': s,
             'rotation': r,
             'score': score,
-            'is_flipped': is_flipped
+            'is_flipped': is_flipped,
+            'detected_text': db_rec['detected_text'],
+            'patient_id': db_rec['patient_id']
         }
 
         return input, target, target_weight, meta

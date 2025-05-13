@@ -56,7 +56,7 @@ class PatchTrainer:
 
         with tqdm(enumerate(data_loader), desc="Training", total=len(data_loader)) as pbar:
             
-            for i, (images, patches, labels, meta) in pbar:
+            for i, (images, patches, labels) in pbar:
                 data_time.update(time.time() - end)
                 images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
 
@@ -123,7 +123,7 @@ class PatchTrainer:
         all_probs = []
 
         with torch.no_grad():
-            for images, patches, labels, meta in tqdm(val_loader):
+            for images, patches, labels in tqdm(val_loader):
                 images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
 
                 # 🔹 이진 분류(BCE) vs 다중 분류(CE) 적용
@@ -193,7 +193,7 @@ class PatchTrainer:
         all_probs = []
 
         with torch.no_grad():
-            for image, patch, label, meta in tqdm(dataloader, desc='[Inference]'):
+            for image, patch, label in tqdm(dataloader, desc='[Inference]'):
                 image, patch, label = image.to(device), patch.to(device), label.to(device)
 
                 if self.is_binary:

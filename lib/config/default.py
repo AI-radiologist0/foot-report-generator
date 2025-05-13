@@ -36,10 +36,14 @@ _C.CUDNN.ENABLED = True
 
 # common params for NETWORK (Feature Extractor)
 _C.MODEL = CN()
+_C.MODEL.FREEZE = CN(new_allowed=True)
 _C.MODEL.NAME = 'feature_extractor'
 _C.MODEL.EXTRA = MODEL_EXTRAS[_C.MODEL.NAME]
 _C.MODEL.INIT_WEIGHTS = True
 _C.MODEL.PRETRAINED = True
+_C.MODEL.FREEZE.BACKBONE = False
+_C.MODEL.FREEZE.PROJECTION = False
+_C.MODEL.FREEZE.CLASSIFIER = False
 
 # Params for Decoder (GPT2)
 _C.DECODER = CN()
@@ -70,6 +74,8 @@ _C.DATASET.MEAN = [0.1147, 0.1147, 0.1147]
 _C.DATASET.STD = [0.2194, 0.2194, 0.2194]
 # _C.DATASET.SPLIT_RATIO = {'train': 0.7, 'validation': 0.15, 'test': 0.15}
 _C.DATASET.TARGET_CLASSES = ['oa', 'normal']
+_C.DATASET.MULTI_RUN = False
+_C.DATASET.MULTI_RUN_SEEDING = False
 
 _C.DATASET.PKL = 'data/pkl/output.pkl'
 _C.DATASET.USE_PKL = True

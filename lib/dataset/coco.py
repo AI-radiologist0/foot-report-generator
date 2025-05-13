@@ -329,6 +329,11 @@ class COCODataset(JointsDataset):
         return image_path
 
     def _load_coco_person_detection_results(self):
+        """
+        
+            BBOX JSON FILE 사용 시 mycoco가 아니라 coco.py로 접근
+        
+        """
         all_boxes = None
         with open(self.bbox_file, 'r') as f:
             all_boxes = json.load(f)
@@ -336,8 +341,8 @@ class COCODataset(JointsDataset):
         if not all_boxes:
             logger.error('=> Load %s fail!' % self.bbox_file)
             return None
-        
-        all_boxes = all_boxes if 'annotations' not in all_boxes.keys() else all_boxes['annotations']
+        # 250418 이전 버전
+        # all_boxes = all_boxes if 'annotations' not in all_boxes.keys() else all_boxes['annotations']
         
         logger.info('=> Total boxes: {}'.format(len(all_boxes)))
 
@@ -360,7 +365,8 @@ class COCODataset(JointsDataset):
             else:
                 image_id = det_res['image_id']    
             
-            letter_box = det_res['letter_bbox']
+            patient_id = det_res.get("patient_id", "")
+            detected_text = det_res.get("detected_text", "")
             box = det_res['bbox']
             score = det_res['score']
 
@@ -381,7 +387,8 @@ class COCODataset(JointsDataset):
                 'score': score,
                 'joints_3d': joints_3d,
                 'joints_3d_vis': joints_3d_vis,
-                'letter_box': letter_box
+                'patient_id': patient_id,
+                'detected_text': detected_text,
             })
 
         logger.info('=> Total boxes after fliter low score@{}: {}'.format(
@@ -410,7 +417,9 @@ class COCODataset(JointsDataset):
                 'area': all_boxes[idx][4],
                 'score': all_boxes[idx][5],
                 'image': image_value,
-                'image_id': image_id[idx]
+                'image_id': image_id[idx], 
+                'detected_text': kwargs['detected_text'][idx],
+                'patient_id': kwargs['patient_id'][idx]
             })
             # print(_kpts[-1])
         # image x person x (keypoints)
@@ -503,6 +512,8 @@ class COCODataset(JointsDataset):
                 key_points[:, ipt * 3 + 2] = _key_points[:, ipt, 2]  # keypoints score.
 
             result = [{'image_id': int(img_kpts[k]['image_id']) if not isinstance(img_kpts[k]['image_id'], str) else img_kpts[k]['image_id'],
+                       'patient_id': img_kpts[k]['patient_id'],
+                       'detected_text': img_kpts[k]['detected_text'],
                        'category_id': cat_id,
                        'keypoints': list(key_points[k]),
                        'score': img_kpts[k]['score'],

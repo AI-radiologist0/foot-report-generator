@@ -1,4 +1,5 @@
 import os
+import logging
 import json, re
 import unicodedata
 import torch
@@ -12,7 +13,7 @@ from tqdm import tqdm
 from pycocomedical import COCOMedical
 
 
-from utils.utils import prepare_binary_data, prepare_data
+from utils.utils import prepare_binary_data, prepare_data, prepare_data_with_seed
 
 # Image transformations (전역 변수로 변경)
 train_transform = transforms.Compose([
@@ -294,6 +295,7 @@ class FinalSamplesDataset(Dataset):
         """
         Final Samples JSON 기반 Lazy Loading Dataset
         """
+        logger = logging.getLogger()
         self.cfg = cfg
         self.image_transform = image_transform
         self.patch_transform = patch_transform
@@ -330,6 +332,8 @@ class FinalSamplesDataset(Dataset):
             if self.abnormal_mapping:
                 class_label = self.abnormal_mapping.get(class_label.lower(), class_label.lower())
 
+            file_path_key = "file_path" if "file_path" in item.keys() else "file_paths"
+            
             self.data[idx] = {
                 "file_path": item["merged_image_path"],
                 "left_right_file_path": item["file_paths"],  # 추가!
@@ -340,13 +344,31 @@ class FinalSamplesDataset(Dataset):
         
         # prepare_data 적용
         if self.is_binary:
-            balanced_data, _, _ = prepare_data(self.data, self.target_classes, cfg, self.is_binary)
-            self.data = balanced_data
+            # ✅ 시드 기반 반복 실험일 경우
+            if hasattr(cfg.DATASET, "SEED") and cfg.DATASET.SEED is not None:
+                logger.info(f"[Seed={cfg.DATASET.SEED}] 시드 기반 반복 실험용 샘플링 실행")
+                balanced_data, _, _ = prepare_data_with_seed(self.data, self.target_classes, cfg, seed=cfg.DATASET.SEED)
+                self.data = {idx: entry for idx, entry in enumerate(balanced_data)}
+            else:
+                # 기본 처리
+                balanced_data, _, _ = prepare_data(self.data, self.target_classes, cfg, self.is_binary)
+                self.data = {idx: entry for idx, entry in enumerate(balanced_data)}
+
         else:
             self.data = self.data
 
     def __len__(self):
         return len(self.data)
+
+    def get_labels(self):
+        """데이터셋의 라벨만 빠르게 추출 (이미지 로딩 없이)"""
+        labels = []
+        for entry in self.data.values():
+            label_str = self.abnormal_mapping[entry['class_label'].lower()] if self.abnormal_mapping else entry['class_label'].lower()
+            label = self.target_classes.index(label_str)
+            labels.append(label)
+        return labels
+
 
     def __getitem__(self, idx):
         entry = self.data[idx]

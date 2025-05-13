@@ -30,19 +30,21 @@ import torchvision.transforms as transforms
 import _init_path
 from config import cfg, update_config
 from core.patch_trainer import PatchTrainer
-from dataset.joint_patches import FootPatchesDataset, FootPatchesDatasetWithJson
+from dataset.joint_patches import FootPatchesDataset, FootPatchesDatasetWithJson, FinalSamplesDataset
 from utils.utils import EarlyStopping, BestModelSaver
 
 import models
 
 torch.cuda.empty_cache()
+torch.backends.cudnn.benchmark = True
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train classification Network with feature extractor')
     # general
     parser.add_argument('--cfg',
-                        default='./config/large/EachExtractor-EachImages/large_gout_normal_new.yaml',
+                        # default='./config/large/EachExtractor-EachImages/large_gout_normal_new.yaml',
+                        default='config/large/tmp/origin_oa_normal.yaml',
                         help='experiment configure file name',
                         required=False,
                         type=str)
@@ -100,8 +102,28 @@ def main():
     raw = cfg.MODEL.EXTRA.RAW
     patch = cfg.MODEL.EXTRA.PATCH
     model_name = cfg.MODEL.NAME
-    dataset_scale = 'large' if cfg.DATASET.PKL == 'data/pkl/output200x300.pkl' else 'small'
-    dataset_scale = 'large' if cfg.DATASET.PKL == 'data/pkl/final_output_left_right_ordered.pkl' else 'small'
+    
+    if cfg.MODEL.EXTRA.WITH_ATTN:
+        combined_type = 'attn'
+    elif cfg.MODEL.EXTRA.ONLYCAT:
+        combined_type = 'only_cat'
+    elif cfg.MODEL.EXTRA.VIEWCAT:
+        combined_type = 'viewcat'
+
+
+    if cfg.DATASET.USE_PKL:
+        if cfg.DATASET.PKL == 'data/pkl/output200x300.pkl':
+            dataset_type = 'zero_padding'
+            dataset_scale = "large"
+        elif cfg.DATASET.PKL == 'data/pkl/final_output_left_right_ordered.pkl':
+            dataset_type = "flip"
+            dataset_scale = "large"
+        else:
+            dataset_type = "small-frontal"
+            dataset_scale = "small"
+    else:
+        dataset_type = "both_patch"
+        dataset_scale = "origin"
 
     # Set output directories
     final_output_dir = os.path.join('output', f"twobranchModel_{timestamp}_{str_target_classes}_classifier")
@@ -120,6 +142,7 @@ def main():
         f"Target Classes: {str_target_classes}, "
         f"Model Name: {model_name}, "
         f"Dataset Scale: {dataset_scale}, "
+        f"Dataset Type: {dataset_type}, "
         f"Raw Branch: {raw}, "
         f"Patch Branch: {patch}"
     )
@@ -140,14 +163,37 @@ def main():
                    "valid_global_steps": 0}
     
     branch_type = "4branchModel" if model_name == 'feature_extractor2' else "2branchModel"
+    
+    
 
-    # Wandb Init
+    extra = cfg.MODEL.EXTRA
+    tags = [
+        "foot-arthritis",
+        "classification(test)",
+        f"combined={combined_type}",
+    ]
+
+    # EXTRA 키들을 tag로 추가
+    tags.extend([
+        f"ONLYCAT={extra.ONLYCAT}",
+        f"VIEWCAT={extra.VIEWCAT}",
+        f"WITH_ATTN={extra.WITH_ATTN}",
+    ])
+
+    # FREEZE 키들도 tag로 추가
+    freeze = cfg.MODEL.FREEZE
+    tags.extend([
+        f"FREEZE_BACKBONE={freeze.BACKBONE}",
+        f"FREEZE_CLASSIFIER={freeze.CLASSIFIER}",
+        f"FREEZE_PROJECTION={freeze.PROJECTION}"
+    ])
+
     run = wandb.init(
-        project=f"classification({branch_type})",
-        config = dict(cfg),
-        name=f"{branch_type}_{model_name}_{dataset_scale}_{timestamp}_{str_target_classes}_classifier_raw_{raw}_patch_{patch}",  # Include timestamp and cfg name in run name
-        notes="This run includes best_model and final_model logging to WandB.",  # Optional description
-        tags=["hand-arthritis", "classification(test)"]  # Optional tags
+        project=f"classification({branch_type}-final-sample-data)",
+        config=dict(cfg),
+        name=f"{branch_type}_{model_name}_{combined_type}_{dataset_scale}_{dataset_type}_{timestamp}_{str_target_classes}_classifier_raw_{raw}_patch_{patch}",
+        notes="This run includes best_model and final_model logging to WandB.",
+        tags=tags
     )
 
     if cfg.DATASET.USE_PKL:
@@ -156,17 +202,18 @@ def main():
             pkl_data = pickle.load(f)
         dataset = FootPatchesDataset(cfg, pkl_data)
     else:
-        dataset = FootPatchesDatasetWithJson(cfg)
+        # dataset = FootPatchesDatasetWithJson(cfg)
+        dataset = FinalSamplesDataset(cfg)
     logging.info('Dataset Loading ...')
 
-    train_size = int(0.7 * len(dataset))
-    val_size = int(0.15 * len(dataset))
+    train_size = int(0.8 * len(dataset))
+    val_size = int(0.1 * len(dataset))
     test_size = len(dataset) - train_size - val_size
     
     train_dataset, val_dataset, test_dataset = torchUtils.random_split(dataset, [train_size, val_size, test_size])
-    train_loader = torchUtils.DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE_PER_GPU, shuffle=True)
-    val_loader = torchUtils.DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE_PER_GPU, shuffle=False)
-    test_loader = torchUtils.DataLoader(test_dataset, batch_size=cfg.TEST.BATCH_SIZE_PER_GPU, shuffle=False)
+    train_loader = torchUtils.DataLoader(train_dataset, batch_size=cfg.TRAIN.BATCH_SIZE_PER_GPU, shuffle=True, drop_last=True)
+    val_loader = torchUtils.DataLoader(val_dataset, batch_size=cfg.TEST.BATCH_SIZE_PER_GPU, shuffle=False, drop_last=False)
+    test_loader = torchUtils.DataLoader(test_dataset, batch_size=cfg.TEST.BATCH_SIZE_PER_GPU, shuffle=False, drop_last=False)
     
     # Train and Validation by Using Trainier
     logging.info('Prepare Trainer ...')

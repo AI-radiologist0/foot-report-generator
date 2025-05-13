@@ -40,6 +40,11 @@ feature_extractor2.CKPT = 'wandb/run-ra-binary-classifier/files/best_model.pth'
 feature_extractor2.USE_CKPT = False
 feature_extractor2.FREEZE = True
 feature_extractor2.CLASSIFIER_HEAD = False
+feature_extractor2.WITH_ATTN = True
+feature_extractor2.ONLYCAT = False
+feature_extractor2.VIEWCAT = False
+
+
 
 
 # Add GPT-2 Configuration

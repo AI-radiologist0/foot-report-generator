@@ -368,6 +368,8 @@ class COCODataset(JointsDataset):
                 'score': score,
                 'joints_3d': joints_3d,
                 'joints_3d_vis': joints_3d_vis,
+                'patient_id': det_res['patient_id'],
+                'detected_text': det_res['detected_text'],
             })
 
         logger.info('=> Total boxes after fliter low score@{}: {}'.format(
@@ -381,7 +383,7 @@ class COCODataset(JointsDataset):
         if not os.path.exists(res_folder):
             os.makedirs(res_folder)
         res_file = os.path.join(
-            res_folder, 'keypoints_%s_results.json' % self.image_set)
+            res_folder, 'keypoints_%s_results_v3.json' % self.image_set)
         # person x (keypoints)
         _kpts = []
         for idx, kpt in enumerate(preds):
@@ -396,9 +398,11 @@ class COCODataset(JointsDataset):
                 'area': all_boxes[idx][4],
                 'score': all_boxes[idx][5],
                 'image': image_value,
-                'image_id': image_id[idx]
+                'image_id': image_id[idx],
+                'patient_id': kwargs.get('patient_id', ""),
+                'letter_bbox': kwargs.get('letter_bbox', ""),    
             })
-            # print(_kpts[-1])
+            print(_kpts[-1])
         # image x person x (keypoints)
         kpts = defaultdict(list)
         for kpt in _kpts:
@@ -444,7 +448,7 @@ class COCODataset(JointsDataset):
 
     # =====================================================================
     # this part will turned from temporary json format to COCO Format
-    def _write_coco_keypoint_results(self, keypoints, res_file):
+    def _write_coco_keypoint_results(self, keypoints, res_file, *args, **kwargs):
         data_pack = [{'cat_id': self._class_to_coco_ind[cls],
                       'cls_ind': cls_ind,
                       'cls': cls,
@@ -489,6 +493,7 @@ class COCODataset(JointsDataset):
                 key_points[:, ipt * 3 + 2] = _key_points[:, ipt, 2]  # keypoints score.
 
             result = [{'image_id': int(img_kpts[k]['image_id']),
+                       'patient_id': int(img_kpts[k]['patient_id']),
                        'category_id': cat_id,
                        'keypoints': list(key_points[k]),
                        'score': img_kpts[k]['score'],

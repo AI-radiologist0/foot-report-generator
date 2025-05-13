@@ -14,6 +14,7 @@ import os
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from dataset.coco import map_keypoints
 from core.config import get_model_name
@@ -102,14 +103,15 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir,
     all_boxes = np.zeros((num_samples, 6))
     image_path = []
     image_id = []
-    letter_bbox = []
+    detected_text = []
     filenames = []
     imgnums = []
+    patient_id = []
     idx = 0
 
     with torch.no_grad():
         end = time.time()
-        for i, (input, target, target_weight, meta) in enumerate(val_loader):
+        for i, (input, target, target_weight, meta) in tqdm(enumerate(val_loader)):
             # compute output
             output = model(input)
 
@@ -171,7 +173,8 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir,
             all_boxes[idx:idx + num_images, 5] = score
             image_path.extend(meta['image'])
             image_id.extend(meta['image_id'])
-            # letter_bbox.extend(meta['letter_bbox'])
+            detected_text.extend(meta['detected_text'])
+            patient_id.extend(meta['patient_id'])
             
             if config.DATASET.DATASET == 'posetrack':
                 filenames.extend(meta['filename'])
@@ -195,7 +198,7 @@ def validate(config, val_loader, val_dataset, model, criterion, output_dir,
         # Evaluate using the mapped predictions
         name_values, perf_indicator = val_dataset.evaluate(
             config, all_preds, output_dir, all_boxes, image_path, image_id,
-            filenames, imgnums)
+            filenames, imgnums, detected_text=detected_text, patient_id=patient_id)
 
         _, full_arch_name = get_model_name(config)
         if isinstance(name_values, list):
