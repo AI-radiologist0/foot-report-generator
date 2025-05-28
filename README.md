@@ -1,17 +1,119 @@
-# Pickle File Structure for Foot Detection Data
+# Foot Report Generator
 
 ## Overview
 
-This pickle file stores processed foot detection data, including keypoints, extracted patches, and bounding box coordinates for detected feet. Each entry in the pickle file corresponds to a processed image, with metadata and extracted features.
+**Foot Report Generator** is a deep learning pipeline for foot medical image analysis. It extracts keypoints, patches, and bounding boxes from images, and supports classification/diagnosis experiments. The project leverages PyTorch, YOLO, custom models, dataset loaders, experiment automation, visualization, and wandb integration—making it suitable for both research and practical applications.
 
-## File Format
+---
 
-The pickle file is a Python dictionary where:
+## Directory Structure
+
+```
+.
+├── tool/                # Main scripts for training, inference, preprocessing, etc.
+├── lib/                 # Core library: models, datasets, utilities
+│   ├── models/          # Network architectures (ResNet, YOLO, Feature Extractor, etc.)
+│   ├── dataset/         # Custom datasets and loaders
+│   ├── utils/           # Visualization, evaluation, and utility functions
+│   └── core/            # Core logic (e.g., Trainer)
+├── config/              # Experiment/model configuration files (yaml/json)
+├── output/              # Experiment results, model checkpoints, logs
+├── wandb/               # wandb experiment logs
+├── sampling_output/     # Intermediate outputs (sampling, logs, etc.)
+├── embedding/, decoder_tool/, vector_tool/, vis_graph/, bbx_visualization/
+│                        # Additional analysis/visualization/embedding tools
+├── data/                # Raw data, json, pkl, images, etc.
+├── environment.yml      # Conda environment and dependencies
+├── README.md            # (This file)
+└── ...
+```
+
+---
+
+## Main Features
+
+- **Data Preprocessing & Structuring**  
+  - Extracts keypoints, bounding boxes, and patches from images and stores them in pickle files.
+- **Deep Learning-based Classification/Diagnosis**  
+  - Supports various models (feature_extractor, resnet, yolo, etc.)
+  - Config-driven experiment automation and wandb integration.
+- **Visualization & Analysis**  
+  - ROC curve, tensorboard, wandb, bbox/keypoint visualization, and more.
+- **Utilities**  
+  - EarlyStopping, BestModelSaver, stratified split, and other research-friendly tools.
+
+---
+
+## Getting Started
+
+### 1. Environment Setup
+
+```bash
+conda env create -f environment.yml
+conda activate biobert_lora_env
+```
+
+### 2. Data Preparation
+
+- Place your data files (json, pkl, images, etc.) in the `data/` directory.
+- Adjust data paths in your config file (e.g., `config/large/tmp/origin_oa_normal.yaml`).
+
+### 3. Running Experiments
+
+Example: Run 20 repeated experiments with a specific config file
+
+```bash
+python tool/patch_train_exp.py --cfg config/large/tmp/origin_oa_normal.yaml --repeat 20
+```
+
+- Results will be saved in the `output/` and `wandb/` directories.
+
+### 4. Checking Results
+
+- Use tensorboard, wandb, and files in the output folder for analysis and visualization.
+
+---
+
+## Configuration
+
+Config files are in YAML format. Example key sections:
+
+```yaml
+MODEL:
+  NAME: feature_extractor2
+  PRETRAINED: True
+  EXTRA:
+    WITH_ATTN: False
+    ONLYCAT: True
+    VIEWCAT: False
+  FREEZE:
+    BACKBONE: True
+    PROJECTION: False
+    CLASSIFIER: False
+DATASET:
+  INCLUDE_CLASSES: ['oa', 'normal']
+  JSON: data/json/tmp0418/joint/final_samples_both_only_v2.json
+  PKL: data/pkl/output200x300.pkl
+  TARGET_CLASSES: ['oa', 'normal']
+TRAIN:
+  BATCH_SIZE_PER_GPU: 48
+  BEGIN_EPOCH: 0
+  END_EPOCH: 50
+  OPTIMIZER: adam
+  LR: 0.001
+  ...
+```
+
+---
+
+## Pickle File Structure
+
+Each pickle file is a Python dictionary where:
 
 - Each **image index (integer)** is a key.
 - The value is a nested dictionary containing metadata and extracted data.
 
-## Structure
+Example structure:
 
 ```
 {
@@ -23,91 +125,46 @@ The pickle file is a Python dictionary where:
             "class": "Uncertain"
         },
         "data": {
-            "left_bbox": [x1, y1, x2, y2],  # Bounding box coordinates for the left foot
-            "right_bbox": [x1, y1, x2, y2],  # Bounding box coordinates for the right foot
-            "left_keypoints": [[x1, y1], [x2, y2], ..., [x17, y17]],  # List of left foot keypoints
-            "right_keypoints": [[x1, y1], [x2, y2], ..., [x17, y17]],  # List of right foot keypoints
-            "left_patches": {  # Dictionary of extracted patches for left foot
-                1: [x1, y1, x2, y2],  # ROI coordinates for patch around keypoint 1
-                2: [x1, y1, x2, y2],
-                ...
-                17: [x1, y1, x2, y2]
-            },
-            "right_patches": {  # Dictionary of extracted patches for right foot
-                1: [x1, y1, x2, y2],  # ROI coordinates for patch around keypoint 1
-                2: [x1, y1, x2, y2],
-                ...
-                17: [x1, y1, x2, y2]
-            }
+            "left_bbox": [x1, y1, x2, y2],
+            "right_bbox": [x1, y1, x2, y2],
+            "left_keypoints": [[x1, y1], ..., [x17, y17]],
+            "right_keypoints": [[x1, y1], ..., [x17, y17]],
+            "left_patches": { 1: [x1, y1, x2, y2], ... },
+            "right_patches": { 1: [x1, y1, x2, y2], ... }
         }
     },
-    1: { ... }  # Next processed image
+    1: { ... }
 }
 ```
 
-## Description of Fields
+- **meta**: Metadata about the image and patient.
+- **data**: Processed outputs (bounding boxes, keypoints, patches, etc.)
 
-- **meta**: Contains metadata about the image and patient.
+See the original README or code for more details and usage examples.
 
-  - `file_path`: Path to the original image.
-  - `patient_id`: Unique patient identifier.
-  - `diagnosis`: Doctor's diagnosis.
-  - `class`: Diagnosis classification.
+---
 
-- **data**: Contains processed outputs.
+## Main Dependencies
 
-  - `left_bbox`: Bounding box coordinates `[x1, y1, x2, y2]` for the left foot.
-  - `right_bbox`: Bounding box coordinates `[x1, y1, x2, y2]` for the right foot.
-  - `left_keypoints`: List of 17 (x, y) keypoints detected in the left foot.
-  - `right_keypoints`: List of 17 (x, y) keypoints detected in the right foot.
-  - `left_patches`: Dictionary mapping keypoint indices (1-17) to ROI coordinates `[x1, y1, x2, y2]` for the left foot.
-  - `right_patches`: Dictionary mapping keypoint indices (1-17) to ROI coordinates `[x1, y1, x2, y2]` for the right foot.
+- Python 3.8+
+- PyTorch, torchvision, torchaudio
+- wandb, opencv, matplotlib, seaborn, and more
+- See `environment.yml` for the full list
 
-## How to Load the Pickle File
-
-To load the pickle file in Python:
-
-```python
-import pickle
-import cv2
-
-with open("foot_data.pkl", "rb") as f:
-    data = pickle.load(f)
-
-# Example: Accessing the first image entry
-first_idx = list(data.keys())[0]  # Get the first index
-image_data = data[first_idx]
-print("Patient ID:", image_data["meta"]["patient_id"])
-print("Left foot keypoints:", image_data["data"].get("left_keypoints", "Not detected"))
-
-# Load the original image
-image = cv2.imread(image_data["meta"]["file_path"])
-
-# Crop the left foot from the original image using left_bbox
-if "left_bbox" in image_data["data"]:
-    x1, y1, x2, y2 = image_data["data"]["left_bbox"]
-    left_cropped = image[y1:y2, x1:x2]
-    cv2.imshow("Left Foot", left_cropped)
-    cv2.waitKey(0)
-
-# Extract patches from the left foot using left_patches
-if "left_patches" in image_data["data"]:
-    for keypoint_id, (px1, py1, px2, py2) in image_data["data"]["left_patches"].items():
-        patch = left_cropped[py1:py2, px1:px2]
-        cv2.imshow(f"Patch {keypoint_id}", patch)
-        cv2.waitKey(0)
-
-cv2.destroyAllWindows()
-```
+---
 
 ## Notes
 
-- If **left or right foot is not detected**, the corresponding field will not be present in `data`.
-- Instead of storing full patch images, the dataset now stores **ROI coordinates** `[x1, y1, x2, y2]` for patches.
-- The bounding box coordinates **(********`left_bbox`********, ********`right_bbox`********)** store the detected foot region before resizing.
-- To extract patches from the original image, use these coordinates with `cv2.imread()`.
+- The project includes experiment automation, model saving/loading, ROC/PR curve visualization, wandb integration, and more.
+- Utilities and analysis/visualization tools are available in `tool/`, `lib/`, `bbx_visualization/`, `vis_graph/`, etc.
 
-## Conclusion
+---
 
-This structured format enables easy retrieval and analysis of foot detection data, allowing seamless integration into machine learning workflows or medical diagnosis tools.
+## License
+
+See the LICENSE file for details.
+
+---
+
+**If you need more detailed usage examples, data structure explanations, or experiment result interpretation, feel free to ask!**
 
