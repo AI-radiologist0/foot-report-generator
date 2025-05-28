@@ -44,6 +44,60 @@
 
 ---
 
+## Joint Detector
+
+The **joint detector** is a key module for detecting anatomical keypoints (joints) in foot images. It is implemented in [`tool/joint_detector.py`](tool/joint_detector.py) and is based on a deep convolutional neural network (typically a ResNet backbone with deconvolution layers, e.g., `pose_resnet`).
+
+### Main Features
+
+- **Input:** Foot images (e.g., X-ray or photographic images).
+- **Output:** 2D coordinates of anatomical keypoints (joints) for each foot in the image.
+- **Model:** Uses a configurable pose estimation network (default: `pose_resnet`), which outputs heatmaps for each joint.
+- **Configurable:** All settings (model, dataset, augmentation, etc.) are controlled via YAML config files (see `config/debugging_for_joint_detector_config.yaml` for an example).
+
+### How to Use
+
+You can run the joint detector as a standalone script:
+
+```bash
+python tool/joint_detector.py --cfg config/debugging_for_joint_detector_config.yaml
+```
+
+- The script loads the model, runs inference on the test set, and outputs detected keypoints.
+- Supports options for using detected or ground-truth bounding boxes, flipping, post-processing, and more (see script arguments).
+
+### Model Architecture
+
+- The default model is a ResNet-based pose estimation network (`pose_resnet`), which is widely used for human/animal keypoint detection.
+- The model outputs a set of heatmaps, one per joint, from which the 2D coordinates are extracted.
+
+### Configuration Example
+
+```yaml
+MODEL:
+  NAME: 'pose_resnet'
+  PRETRAINED: 'ckpt/detector/final_state.pth.tar'
+  IMAGE_SIZE: [288, 384]
+  NUM_JOINTS: 17
+  EXTRA:
+    HEATMAP_SIZE: [72, 96]
+    SIGMA: 2
+    NUM_DECONV_LAYERS: 3
+    NUM_DECONV_FILTERS: [256, 256, 256]
+    ...
+DATASET:
+  DATASET: 'coco'
+  ROOT: 'data/coco/'
+  TEST_SET: 'JPEGImages'
+  ...
+```
+
+### Output
+
+- The detected keypoints can be used for downstream tasks such as patch extraction, classification, or visualization.
+
+---
+
 ## Getting Started
 
 ### 1. Environment Setup
