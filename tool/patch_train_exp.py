@@ -12,9 +12,15 @@ import _init_path
 from config import cfg, update_config
 from dataset.joint_patches import FinalSamplesDataset
 from utils.utils import EarlyStopping, BestModelSaver, stratified_split_dataset, check_label_distribution_from_subset
+from utils.vis import plot_roc_curve
 from core.patch_trainer import PatchTrainer
 import models
 import wandb
+from wandb import AlertLevel
+
+def flatten_binary_scores(y_score_list):
+    return [float(s[0]) if isinstance(s, (list, np.ndarray)) and len(s) == 1 else float(s)
+            for s in y_score_list]
 
 
 def setup_logger(output_dir):
@@ -63,6 +69,7 @@ def run_experiment(seed: int, cfg, model_name, final_output_dir, device, tags, r
     test_loader = torchUtils.DataLoader(test_dataset, batch_size=cfg.TEST.BATCH_SIZE_PER_GPU)
 
     model = eval('models.' + model_name + '.get_feature_extractor')(cfg, is_train=True).to(device)
+    logging.info(f"✅ Loaded model: {model.__class__.__name__}")
 
     writer_dict = {
         'writer': SummaryWriter(log_dir=os.path.join(final_output_dir, f'tensorboard/seed{seed}')),
@@ -87,7 +94,7 @@ def run_experiment(seed: int, cfg, model_name, final_output_dir, device, tags, r
 
     for epoch in range(cfg.TRAIN.BEGIN_EPOCH, cfg.TRAIN.END_EPOCH):
         train_loss, train_acc = trainer.train(epoch, train_loader, optimizer)
-        val_perf, val_loss, precision, recall, f1 = trainer.validate(epoch, model, val_loader)
+        val_perf, val_loss, precision, recall, f1, _, _ = trainer.validate(epoch, model, val_loader)
         best_model_saver.save(model, val_loss)
         early_stopping(val_loss)
         run.log({"train_loss": train_loss, "train_acc": train_acc, "val_loss": val_loss,
@@ -97,10 +104,28 @@ def run_experiment(seed: int, cfg, model_name, final_output_dir, device, tags, r
             break
 
     model = best_model_saver.load_best_model(model).to(device).eval()
-    test_perf, test_loss, precision, recall, f1 = trainer.validate(999, model, test_loader)
-
+    test_perf, test_loss, precision, recall, f1, y_true, y_score = trainer.validate(999, model, test_loader)
+    
     run.log({"test_perf": test_perf, "test_loss": test_loss,
              "precision(test)": precision, "recall(test)": recall, "f1_score(test)": f1})
+    
+    y_score = flatten_binary_scores(y_score) if trainer.is_binary else y_score
+    
+    roc_path = plot_roc_curve(
+        y_true=y_true,
+        y_score=y_score,
+        output_dir=final_output_dir,
+        seed=seed,
+        is_binary=trainer.is_binary,
+        run=run
+    )
+    
+    wandb.alert(
+        title=f"[{run_name}] Experiment Finished", 
+        text=f"Seed {seed} Finish. \n Accuracy: {test_perf:.4f}, F1: {f1:.4f}", 
+        level=AlertLevel.INFO
+    )
+
     run.finish()
 
     return test_perf, f1
@@ -110,6 +135,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--cfg', default='config/large/tmp/origin_oa_normal.yaml', type=str)
+    parser.add_argument('--repeat', default=20, type=int)
     args = parser.parse_args()
 
     update_config(cfg, args)
@@ -119,6 +145,7 @@ def main():
     str_target_classes = '_'.join(target_classes)
     final_output_dir = os.path.join('output', f"multi_run_{timestamp}_{model_name}")
     logger = setup_logger(final_output_dir)
+    repeat = args.repeat
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -126,6 +153,7 @@ def main():
     freeze = cfg.MODEL.FREEZE
     tags = [
         "foot-arthritis",
+        f"MODEL={model_name}",
         f"TARGET={str_target_classes}",
         f"RAW={extra.RAW}",
         f"PATCH={extra.PATCH}",
@@ -134,12 +162,19 @@ def main():
         f"VIEWCAT={extra.VIEWCAT}",
         f"FREEZE_BACKBONE={freeze.BACKBONE}",
         f"FREEZE_CLASSIFIER={freeze.CLASSIFIER}",
-        f"FREEZE_PROJECTION={freeze.PROJECTION}"
+        f"FREEZE_PROJECTION={freeze.PROJECTION}",
+        f"REPEAT_NUMBER={repeat}"
     ]
+    
+    logging.info("📌 Experiment Tags:")
+    for tag in tags:
+        logging.info(f"  - {tag}")
+        
+    logging.info(f"MODEL NAME: {model_name}")
 
     if getattr(cfg.DATASET, 'MULTI_RUN', False):
         accs, f1s = [], []
-        for seed in range(20):
+        for seed in range(repeat):
             run_name = f"{model_name}_{str_target_classes}_seed{seed}_{timestamp}"
             logging.info(f"Running experiment {seed}...")
             acc, f1 = run_experiment(seed, cfg, model_name, final_output_dir, device, tags, run_name)

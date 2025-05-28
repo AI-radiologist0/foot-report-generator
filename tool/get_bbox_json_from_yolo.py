@@ -1,4 +1,5 @@
 import argparse
+from collections import defaultdict
 import os, json
 import cv2
 import torch
@@ -6,6 +7,11 @@ import numpy as np
 from tqdm import tqdm
 from ultralytics import YOLO
 from multiprocessing import Pool, cpu_count
+
+
+def get_patient_id(file_path: str) -> str:
+    parts = file_path.split(os.sep)
+    return "_".join(parts[-3:-1])
 
 
 def parse_args():
@@ -26,11 +32,12 @@ def generate_patient_image_list(json_file):
     with open(json_file, "r") as f:
         data = json.load(f)
 
-    patient_dict = {}
+    patient_dict = defaultdict(list)  # 딕셔너리 초기화
     image_paths = []  # 모든 이미지 경로 저장
 
     for record in data["data"]:
-        patient_id = record["patient_id"]
+        # patient_id = record["patient_id"]
+        patient_id = get_patient_id(record["file_path"])
         parent_dir = os.path.dirname(record["file_path"])
         if patient_id not in patient_dict:
             patient_dict[patient_id] = []
@@ -48,9 +55,10 @@ def generate_patient_image_list(json_file):
         if image_data is not None:  # None인 경우 제외
             patient_dict[patient_id].append(image_data)
 
+
     return patient_dict
 
-def get_batch_bbox_from_yolo(yolo_model, batch_data):
+def get_batch_bbox_from_yolo(yolo_model, batch_data, patient_id):
     batch_images = [data["image"] for data in batch_data]  # 로드된 이미지 리스트 전달
     results = yolo_model(batch_images, conf=0.589999999)
     batch_output = []
@@ -83,6 +91,8 @@ def get_batch_bbox_from_yolo(yolo_model, batch_data):
         
         for bbox, score in zip(foot_bboxes, foot_scores):
             batch_output.append({
+                "image_id": 0, # garbage image_id,
+                "patient_id": patient_id,
                 "file_path": batch_data[img_idx]["file_path"],  # 원본 파일 경로 유지
                 "letter_bbox": letter_bbox,
                 "bbox": bbox,
@@ -106,11 +116,18 @@ def main():
     yolo_model = YOLO(yolo_pt).to(DEVICE)
     
     save_json = []
-    for patient_id, batch_data in tqdm(patient_dict.items(), desc="Processing Patients"):
-        batch_results = get_batch_bbox_from_yolo(yolo_model, batch_data)
+    for patient_id, batch_data in tqdm(patient_dict.items(), desc=f"Processing Patients"):
+        print(f"Processing patient: {patient_id}")
+        batch_results = get_batch_bbox_from_yolo(yolo_model, batch_data, patient_id=patient_id)
         save_json.extend(batch_results)
     
-    output_json_path = "/home/jmkim/foot-report-generator/data/json/joint/bbox_from_yolo.json"
+    file_paths = sorted(set(item["file_path"] for item in save_json))
+    file_path_to_id = {fp: i + 1 for i, fp in enumerate(file_paths)}
+
+    for item in save_json:
+        item["image_id"] = file_path_to_id[item["file_path"]]
+
+    output_json_path = "/home/jmkim/foot-report-generator/data/json/tmp0418/joint/bbox_from_yolo_v3.json"
     with open(output_json_path, "w") as f:
         json.dump(save_json, f)
     

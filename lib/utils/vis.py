@@ -17,6 +17,12 @@ import cv2
 from core.inference import get_max_preds
 from utils.transforms import flip_back
 
+import os
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
+from typing import List, Union
+import wandb
+
 def save_batch_image_with_joints_fixed(batch_image, batch_joints, batch_joints_vis,
                                        file_name, nrow=8, padding=2, flip_pairs=None, is_flipped_list=None):
     '''
@@ -284,4 +290,63 @@ def save_debug_images(config, input, meta, target, joints_pred, output,
             input, output, '{}_hm_pred.jpg'.format(prefix)
         )
 
-        
+
+# 아래로 이번 프로젝트에 사용하는 함수 / 위로는 joint detector에서 사용하는 함수
+
+def plot_roc_curve(
+    y_true: List[int],
+    y_score: Union[List[float], List[List[float]]],
+    output_dir: str,
+    seed: int = None,
+    is_binary: bool = True,
+    class_idx: int = 1,
+    run: wandb.sdk.wandb_run.Run = None
+) -> str:
+    """
+    ROC Curve를 그리고 저장하는 함수
+
+    Args:
+        y_true (List[int]): 실제 정답 레이블
+        y_score (List[float] or List[List[float]]): 예측 확률
+        output_dir (str): 저장 디렉토리
+        seed (int, optional): 저장 파일명에 들어갈 seed
+        is_binary (bool): 이진 분류 여부 (False일 경우 다중 클래스)
+        class_idx (int): 다중 클래스에서 ROC를 그릴 클래스 index
+        run (wandb.Run): Weights & Biases run 객체 (None이면 업로드 생략)
+
+    Returns:
+        str: 저장된 이미지 경로
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 이진 분류일 경우: y_score는 [확률값] 리스트
+    if is_binary:
+        y_score_class = y_score
+    else:
+        # 다중 클래스: 해당 클래스의 확률값만 추출
+        y_score_class = [score[class_idx] for score in y_score]
+
+    fpr, tpr, _ = roc_curve(y_true, y_score_class)
+    roc_auc = auc(fpr, tpr)
+
+    # 시각화
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic')
+    plt.legend(loc="lower right")
+
+    filename = f'roc_curve_seed{seed}.png' if seed is not None else 'roc_curve.png'
+    save_path = os.path.join(output_dir, filename)
+    plt.savefig(save_path)
+    plt.close()
+
+    if run is not None:
+        run.log({"roc_curve": wandb.Image(save_path)})
+
+    return save_path
+

@@ -177,7 +177,7 @@ class PatchTrainer:
         logger.info(f'[Epoch {epoch}] Validation Accuracy: {accuracies.avg * 100:.2f}% \t Loss: {losses.avg:.4f}')
         logger.info(f'[Epoch {epoch}] Precision: {precision:.4f} \t Recall: {recall:.4f} \t F1 Score: {f1:.4f}')
 
-        return accuracies.avg * 100, losses.avg, precision, recall, f1
+        return accuracies.avg * 100, losses.avg, precision, recall, f1, all_labels, all_probs
 
     def inference(self, epoch, model, dataloader, device, criterion=None, writer_dict=None):
         model.eval()

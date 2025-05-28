@@ -38,7 +38,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train keypoints network')
     # general
     parser.add_argument('--cfg',
-                        default='config/384x288_d256x3_adam_lr1e-3-RHPE-Foot-N3-Doctor-noflip-cau-newformat-one-val.yaml',
+                        default='config/debugging_for_joint_detector_config.yaml',
                         help='experiment configure file name',
                         required=False,
                         type=str)

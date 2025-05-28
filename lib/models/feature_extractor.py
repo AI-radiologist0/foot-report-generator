@@ -5,6 +5,9 @@ import timm
 from torchvision import models
 import torch.nn.functional as F
 
+logger = logging.getLogger("FreezeLogger")
+logger.setLevel(logging.INFO)
+
 def create_swin_model(variant, pretrained):
     model = timm.create_model(variant, pretrained=pretrained)
     return model, model.num_features
@@ -16,102 +19,134 @@ def create_resnet_model(pretrained, in_channels=3):
     model.fc = nn.Identity()
     return model, dim
 
+
 def get_model(cfg, pretrained=True):
     raw_type = cfg.MODEL.EXTRA.RAW.lower()
     patch_type = cfg.MODEL.EXTRA.PATCH.lower()
 
-    if raw_type == 'swin-t':
-        global_model, global_dim = create_swin_model('swin_tiny_patch4_window7_224', pretrained)
-    elif raw_type == 'resnet':
-        global_model, global_dim = create_resnet_model(pretrained, in_channels=3)
-    else:
-        raise ValueError(f"Unsupported RAW model type: {raw_type}")
+    def load_model(model_type: str, in_channels: int = 3):
+        is_swin = 'swin' in model_type
+        if is_swin:
+            model = timm.create_model(model_type, pretrained=pretrained)
+            model.head = nn.Identity()
+            dim = model.num_features
+        elif model_type == 'resnet':
+            model = models.resnet50(pretrained=pretrained)
+            model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            dim = model.fc.in_features
+            model.fc = nn.Identity()
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
+        return dim, model, is_swin
 
-    if patch_type == 'swin-t':
-        local_model, local_dim = create_swin_model('swin_tiny_patch4_window7_224', pretrained)
-    elif patch_type == 'resnet':
-        local_model, local_dim = create_resnet_model(pretrained, in_channels=3)
-    else:
-        raise ValueError(f"Unsupported PATCH model type: {patch_type}")
+    # Global
+    global_model_type = 'swin_tiny_patch4_window7_224' if raw_type == 'swin-t' else 'resnet'
+    global_dim, global_model, global_is_swin = load_model(global_model_type)
 
-    return global_dim, global_model, local_dim, local_model
+    # Local
+    patch_model_type = 'swin_tiny_patch4_window7_224' if patch_type == 'swin-t' else 'resnet'
+    in_channels = 3 if 'swin' in patch_model_type else 102
+    local_dim, local_model, local_is_swin = load_model(patch_model_type, in_channels)
+
+    return global_dim, global_model, global_is_swin, local_dim, local_model, local_is_swin
+
+
+def pooled_swin_features(x: torch.Tensor) -> torch.Tensor:
+    if x.dim() == 4:
+        if x.shape[1] == x.shape[2] == 7:  # [B, 7, 7, 768]
+            return x.mean(dim=[1, 2])
+        elif x.shape[2] == x.shape[3] == 7:  # [B, 768, 7, 7]
+            return x.mean(dim=[2, 3])
+    raise ValueError(f"Unexpected Swin output shape: {x.shape}")
+
 
 class FeatureExtractor(nn.Module):
     def __init__(self, cfg, pretrained=True, return_sequence=False, return_output_vector=False, **kwarg):
-        super(FeatureExtractor, self).__init__()
-
-        self.target_classes = cfg.DATASET.TARGET_CLASSES
-        self.is_binary = len(self.target_classes) == 2
-        self.output_dim = 1 if self.is_binary else len(self.target_classes)
+        super().__init__()
         self.return_sequence = return_sequence
         self.return_output_vector = return_output_vector
+        self.cfg = cfg
 
-        self.global_feature_dim, self.global_branch, self.local_feature_dim, self.local_branch = get_model(cfg, pretrained=pretrained)
-        self.patch_proj = nn.Linear(self.local_feature_dim, self.global_feature_dim)
+        self.global_feature_dim, self.global_branch, self.global_is_swin, \
+        self.local_feature_dim, self.local_branch, self.local_is_swin = get_model(cfg, pretrained)
 
-        assert isinstance(self.global_feature_dim, int)
-        assert isinstance(self.local_feature_dim, int)
-        assert isinstance(self.global_branch, nn.Module)
-        assert isinstance(self.local_branch, nn.Module)
+        logger.info(f"global feature dimension: {self.global_feature_dim}, local feature dimension: {self.local_feature_dim}")
 
-        logging.info(f"local: {self.local_feature_dim}, global: {self.global_feature_dim}")
+        self.patch_resize = nn.Conv2d(102, 3, kernel_size=1)
+
+
+        self.output_dim = 1 if len(cfg.DATASET.TARGET_CLASSES) == 2 else len(cfg.DATASET.TARGET_CLASSES)
 
         self.classifier = nn.Sequential(
             nn.Linear(self.global_feature_dim + self.local_feature_dim, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
-            nn.Dropout(0.4),
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(0.4),
-            nn.Linear(256, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Linear(64, self.output_dim)
+            nn.Dropout(0.5),
+            nn.Linear(512, self.output_dim),
+            nn.Sigmoid() if self.output_dim == 1 else nn.Identity()
         )
 
-        if cfg.MODEL.EXTRA.USE_CKPT and cfg.MODEL.EXTRA.CKPT:
-            logging.info(f"feature extractor load ckpt flag: {cfg.MODEL.EXTRA.USE_CKPT}")
-            self.load_from_checkpoint(cfg.MODEL.EXTRA.CKPT)
-
     def forward(self, image, patches):
-        global_features = self.global_branch.forward_features(image)
-        if global_features.dim() == 4:
-            global_features = global_features.mean(dim=[1, 2])
-        elif global_features.dim() == 3:
-            global_features = global_features.mean(dim=1)
-        global_features = global_features.unsqueeze(1)
+        # global feature
+        x = self.global_branch.forward_features(image) if self.global_is_swin else self.global_branch(image)
+        global_feat = pooled_swin_features(x) if self.global_is_swin else x
 
+        # local feature
         B, N, C, H, W = patches.shape
-        patches = patches.view(B * N, C, H, W)
-        local_features = self.local_branch(patches)
-        local_features = self.patch_proj(local_features)
-        local_features = local_features.view(B, N, -1)
+        patches = patches.view(B, N * C, H, W)
+        patches = self.patch_resize(patches) if self.local_is_swin else patches
+        patches = F.interpolate(patches, size=(224, 224), mode='bilinear', align_corners=False) if self.local_is_swin else patches
 
-        image_tokens = torch.cat([global_features, local_features], dim=1)  # (B, 1+N, C)
+        x = self.local_branch.forward_features(patches) if self.local_is_swin else self.local_branch(patches)
+        local_feat = pooled_swin_features(x) if self.local_is_swin else x
 
-        if self.return_sequence:
-            return image_tokens  # for Transformer input
-
-        global_vector = global_features.squeeze(1)
-        local_vector = local_features.mean(dim=1)
-        combined_features = torch.cat((global_vector, local_vector), dim=1)
+        combined = torch.cat([global_feat, local_feat], dim=1)
 
         if self.return_output_vector:
-            return combined_features  # for GPT-style decoder input
+            return combined
+        return self.classifier(combined)
 
-        output = self.classifier(combined_features)
-        return torch.sigmoid(output) if self.is_binary else output
 
-    def load_from_checkpoint(self, checkpoint_path, map_location=None):
-        checkpoint = torch.load(checkpoint_path, map_location=map_location)
-        self.load_state_dict(checkpoint)
-        logging.info(f"Model weights loaded from {checkpoint_path}")
+def freeze_module(module: nn.Module):
+    for param in module.parameters():
+        param.requires_grad = False
+
+def apply_freeze(model: nn.Module, cfg):
+    if getattr(cfg.MODEL.FREEZE, 'BACKBONE', False):
+        freeze_module(model.global_branch)
+        freeze_module(model.local_branch)
+
+    if getattr(cfg.MODEL.FREEZE, 'PROJECTION', False):
+        if hasattr(model, 'patch_proj'):
+            freeze_module(model.patch_proj)
+
+    if getattr(cfg.MODEL.FREEZE, 'CLASSIFIER', False):
+        if hasattr(model, 'classifier') and model.classifier is not None:
+            freeze_module(model.classifier)
+
+def log_freeze_status(model: nn.Module, logger: logging.Logger, name: str = ""):
+    logger.info(f"🔍 [Freeze Status] {name}")
+    for param_name, param in model.named_parameters():
+        status = "🔒 FROZEN" if not param.requires_grad else "✅ TRAINABLE"
+        logger.info(f"{status:12} | {name}.{param_name}")
 
 def get_feature_extractor(cfg, is_train, remove_classifier=False, **kwargs):
     model = FeatureExtractor(cfg, **kwargs)
+    
     if remove_classifier and hasattr(model, 'classifier'):
         model.classifier = None
+    
+    apply_freeze(model, cfg)
+
+    # logging
+    logger = logging.getLogger("FreezeLogger")
+    logger.setLevel(logging.INFO)
+    log_freeze_status(model.global_branch, logger, "Global Branch")
+    log_freeze_status(model.local_branch, logger, "Local Branch")
+    if hasattr(model, 'patch_proj'):
+        log_freeze_status(model.patch_proj, logger, "Patch Projection")
+    if hasattr(model, 'classifier') and model.classifier is not None:
+        log_freeze_status(model.classifier, logger, "Classifier")
+
     model.train() if is_train else model.eval()
     return model

@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 
 
+from sklearn.model_selection import train_test_split
+from torch.utils.data import Subset
 import torch
 import torch.optim as optim
 import wandb
@@ -242,6 +244,80 @@ def prepare_data(data, target_classes, cfg, is_binary=False):
 
     return balanced_data, class_counts, final_counts
 
+
+def prepare_abnormal_normal_data_with_seed(data, cfg, seed: int = 42):
+    random.seed(seed)
+    abnormal_classes = ['ra', 'oa', 'gout']
+    normal_classes = ['normal']
+
+    target_classes = abnormal_classes + normal_classes
+    class_counts, data_by_class = count_labels(data, target_classes, cfg)
+    logging.info(f"[Seed={seed}] Original class distribution: {class_counts}")
+
+    combined_data_by_class = {
+        'abnormal': sum([data_by_class[cls] for cls in abnormal_classes], []),
+        'normal': data_by_class['normal']
+    }
+
+    combined_class_counts = {
+        'abnormal': sum([class_counts[cls] for cls in abnormal_classes]),
+        'normal': class_counts['normal']
+    }
+
+    if not cfg.DATASET.BALANCE and not cfg.DATASET.AUGMENT:
+        return sum(combined_data_by_class.values(), []), combined_class_counts, combined_class_counts
+
+    min_class_count = min(combined_class_counts.values())
+
+    balanced_data = []
+    final_counts = {}
+    for label in combined_data_by_class:
+        sampled_data = random.sample(combined_data_by_class[label], min_class_count)
+        balanced_data.extend(sampled_data)
+        final_counts[label] = min_class_count
+
+    if cfg.DATASET.AUGMENT:
+        balanced_data = balanced_data * 2
+        logging.info(f"[Seed={seed}] Data augmentation applied")
+
+    return balanced_data, combined_class_counts, final_counts
+
+
+def prepare_data_with_seed(data, target_classes, cfg, seed: int = 42):
+    """
+    prepare_data()와 동일한 로직을 사용하되, 랜덤 시드를 제어할 수 있도록 확장한 버전.
+    abnormal vs normal 분류도 그대로 지원.
+    """
+    random.seed(seed)
+
+    # abnormal vs normal 분류
+    if len(target_classes) == 2 and 'abnormal' in target_classes and 'normal' in target_classes:
+        logging.info(f"[Seed={seed}] Using abnormal vs normal processing logic")
+        return prepare_abnormal_normal_data_with_seed(data, cfg, seed)
+
+    # 일반 클래스 처리
+    class_counts, data_by_class = count_labels(data, target_classes, cfg)
+    logging.info(f"[Seed={seed}] Original class distribution: {class_counts}")
+
+    if not cfg.DATASET.BALANCE and not cfg.DATASET.AUGMENT:
+        return sum(data_by_class.values(), []), class_counts, class_counts
+
+    min_class_count = min(class_counts.values())
+
+    balanced_data = []
+    final_counts = {}
+    for label in target_classes:
+        sampled_data = random.sample(data_by_class[label], min_class_count)
+        balanced_data.extend(sampled_data)
+        final_counts[label] = min_class_count
+
+    if cfg.DATASET.AUGMENT:
+        balanced_data = balanced_data * 2
+        logging.info(f"[Seed={seed}] Data augmentation applied")
+
+    return balanced_data, class_counts, final_counts
+
+
 def get_optimizer(cfg, model):
     optimizer = None
 
@@ -412,3 +488,51 @@ def prepare_generate_inputs(img_token_id, bos_token_id, device, batch_size=1):
     )
     attention_mask = torch.ones_like(input_ids)
     return input_ids, attention_mask
+
+def extract_labels(dataset):
+    labels = []
+    for i in range(len(dataset)):
+        label = dataset[i][2]
+
+        if isinstance(label, torch.Tensor):
+            label = int(label.item())  # 텐서에서 스칼라 정수로 변환
+
+        labels.append(label)
+    return labels
+
+
+def stratified_split_dataset(dataset, seed=42):
+    labels = dataset.get_labels()
+
+    train_idx, temp_idx = train_test_split(
+        range(len(dataset)), test_size=0.2, stratify=labels, random_state=seed
+    )
+    temp_labels = [labels[i] for i in temp_idx]
+    train_idx, temp_idx = train_test_split(
+        range(len(dataset)), test_size=0.2, stratify=labels, random_state=seed
+    )
+    temp_labels = [labels[i] for i in temp_idx]
+
+    val_idx, test_idx = train_test_split(
+        temp_idx, test_size=0.5, stratify=temp_labels, random_state=seed
+    )
+
+    return Subset(dataset, train_idx), Subset(dataset, val_idx), Subset(dataset, test_idx)
+
+
+from collections import Counter
+
+def check_label_distribution_from_subset(subset, name=""):
+    base_dataset = subset.dataset
+    indices = subset.indices
+
+    if not hasattr(base_dataset, 'get_labels'):
+        raise AttributeError("Subset의 원본 dataset에 get_labels() 메서드가 없습니다.")
+
+    all_labels = base_dataset.get_labels()
+    subset_labels = [all_labels[i] for i in indices]
+
+    dist = Counter(subset_labels)
+    logging.info(f"\n📊 {name} 분포:")
+    for cls, count in sorted(dist.items()):
+        logging.info(f"  클래스 {cls}: {count}개")

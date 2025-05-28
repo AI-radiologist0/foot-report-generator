@@ -126,19 +126,31 @@ class TwoBranchModelOnlyCat(BaseTwoBranchModel):
             resnet_global_features, resnet_patch_features
         ], dim=1)
 
-        # classifier input 크기와 맞지 않으면 동적으로 생성
+        # 동적 classifier 생성
         if combined_features.shape[1] != self.classifier[0].in_features:
-            self.classifier = nn.Sequential(
-                nn.Linear(combined_features.shape[1], 512),
-                nn.BatchNorm1d(512),
-                nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(512, 1),
-                nn.Sigmoid()
-            ).to(image.device)
+            self.classifier = self._build_classifier(combined_features.shape[1]).to(image.device)
 
         return self.classifier(combined_features)
 
+    
+    def _build_classifier(self, in_dim: int):
+        return nn.Sequential(
+            nn.Linear(in_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, 1),
+            nn.Sigmoid()
+        )
+
+    def load_state_dict(self, state_dict, strict=True):
+        # classifier 구조 추론
+        cls_weight = state_dict.get('classifier.0.weight', None)
+        if cls_weight is not None:
+            in_dim = cls_weight.shape[1]
+            self.classifier = self._build_classifier(in_dim).to(next(self.parameters()).device)
+        super().load_state_dict(state_dict, strict)
+    
 
 class TwoBranchModelViewCat(BaseTwoBranchModel):
     def __init__(self, pretrained=True):
