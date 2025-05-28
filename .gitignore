@@ -143,3 +143,55 @@ data/
 
 wandb/
 output/
+sampling_output/
+bbx_visualization/
+# Python cache files
+__pycache__/
+*.pyc
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Model checkpoints and weights
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+
+# Log files
+*.log
+*.out
+nohup.out
+
+# Dataset files
+*.pkl
+*.npy
+*.npz
+*.csv
+*.json
+
+# Temporary files
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE specific files
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Experiment outputs
+vis_graph/
+embedding/
+decoder_tool/
+vector_tool/
