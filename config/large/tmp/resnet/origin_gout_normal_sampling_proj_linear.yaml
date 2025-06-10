@@ -20,8 +20,8 @@ DATASET:
   USE_RAW: True
   USE_PKL: False
   REPORT: False
-  MULTI_RUN: True
-  MULTI_RUN_SEEDING: True
+  MULTI_RUN: False
+  MULTI_RUN_SEEDING: False
 DATA_DIR: 
 DEBUG:
   DEBUG: False
@@ -36,14 +36,14 @@ KFOLD:
 LOG_DIR: 
 MODEL:
   INIT_WEIGHTS: True
-  NAME: feature_extractor
+  NAME: feature_extractor3
   PRETRAINED: True
   EXTRA:
     WITH_ATTN: False
     ONLYCAT: True
     VIEWCAT: False
-    RAW: swin-t
-    PATCH: swin-t
+    RAW: resnet
+    PATCH: resnet
   FREEZE:
     BACKBONE: False
     PROJECTION: False

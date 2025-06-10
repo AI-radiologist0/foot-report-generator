@@ -65,7 +65,7 @@ TEST:
   BATCH_SIZE: 512
   COCO_FILE: 'data/json/foot_new_0210__test.json'
   # COCO_BBOX_FILE: 'data/json/joint/ocr_results_v1.1.json' # 25.04.18 이전 버전
-  COCO_BBOX_FILE: 'data/json/tmp0418/joint/ocr_results_v3.json'
+  COCO_BBOX_FILE: 'data/json/tmp0418/joint/bbox_for_debugging_jd.json'
   BBOX_THRE: 1.0
   FLIP_TEST: false
   IMAGE_THRE: 0.8

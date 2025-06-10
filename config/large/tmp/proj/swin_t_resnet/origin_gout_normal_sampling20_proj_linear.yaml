@@ -36,14 +36,12 @@ KFOLD:
 LOG_DIR: 
 MODEL:
   INIT_WEIGHTS: True
-  NAME: feature_extractor
+  NAME: feature_extractor3
   PRETRAINED: True
   EXTRA:
     WITH_ATTN: False
     ONLYCAT: True
     VIEWCAT: False
-    RAW: swin-t
-    PATCH: swin-t
   FREEZE:
     BACKBONE: False
     PROJECTION: False
@@ -55,7 +53,7 @@ TEST:
   BATCH_SIZE_PER_GPU: 64
   TEST_SET_RATIO: 0.10
 TRAIN:
-  BATCH_SIZE_PER_GPU: 64
+  BATCH_SIZE_PER_GPU: 128
   BEGIN_EPOCH: 0
   CHECKPOINT: 
   DECAY: 0.0005
