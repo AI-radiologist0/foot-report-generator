@@ -170,6 +170,7 @@ nohup.out
 *.npz
 *.csv
 *.json
+*.png
 
 # Temporary files
 *.swp
