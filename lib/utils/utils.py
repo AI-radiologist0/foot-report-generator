@@ -8,11 +8,14 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from copy import deepcopy
 import os
 import logging
 import random
 import time
 from pathlib import Path
+import tempfile
+import tarfile
 
 
 from sklearn.model_selection import train_test_split
@@ -394,43 +397,66 @@ class AverageMeter(object):
         
 
 class BestModelSaver:
-    def __init__(self, save_path="best_model.pth", verbose=False):
+    def __init__(self, save_path="best_model.pth.tar.gz", verbose=False):
         """
         Args:
-            save_path (str): 베스트 모델을 저장할 경로
-            verbose (bool): 모델 저장 시 출력 여부
+            save_path (str): Path to save the best model (as tar.gz)
+            verbose (bool): Whether to print log messages
         """
         self.save_path = os.path.join(wandb.run.dir, save_path)
-        self.final_path = os.path.join(wandb.run.dir, "final_model.pth")
-        self.best_loss = float("inf")  # 초기값은 무한대
+        self.final_path = os.path.join(wandb.run.dir, "final_model.pth.tar.gz")
+        self.best_loss = float("inf")
         self.verbose = verbose
+        self.prev_save_path = None
 
     def save(self, model, val_loss):
         """
         Args:
-            model (torch.nn.Module): 저장할 모델
-            val_loss (float): 현재 검증 손실
+            model (torch.nn.Module): Model to save
+            val_loss (float): Current validation loss
         """
         if val_loss < self.best_loss:
             self.best_loss = val_loss
-            torch.save(model.state_dict(), self.save_path)
-            
-            # wandb.log({"Best Val Loss": val_loss})
-            
+            # Delete previous best tar.gz file if exists
+            if self.prev_save_path and os.path.exists(self.prev_save_path):
+                os.remove(self.prev_save_path)
+            # Save state_dict to a temporary .pth file
+            with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as tmp_pth:
+                torch.save(model.state_dict(), tmp_pth.name)
+                tmp_pth_path = tmp_pth.name
+            # Compress the .pth file into tar.gz
+            with tarfile.open(self.save_path, "w:gz") as tar:
+                tar.add(tmp_pth_path, arcname="best_model.pth")
+            os.remove(tmp_pth_path)
+            self.prev_save_path = self.save_path
             if self.verbose:
-                logging.info(f"🔹 Best model saved! New best loss: {val_loss:.6f}")
-    
+                logging.info(f"🔹 Best model saved as tar.gz! New best loss: {val_loss:.6f}")
+
     def save_final_model(self, model):
-        torch.save(model.state_dict(), self.final_path)
+        # Save final model as tar.gz
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as tmp_pth:
+            torch.save(model.state_dict(), tmp_pth.name)
+            tmp_pth_path = tmp_pth.name
+        with tarfile.open(self.final_path, "w:gz") as tar:
+            tar.add(tmp_pth_path, arcname="final_model.pth")
+        os.remove(tmp_pth_path)
         if self.verbose:
             logging.info(f"✅ Final model saved to {self.final_path}")
 
     def load_best_model(self, model, path=None):
-        """저장된 베스트 모델을 로드하는 메서드"""
-
-        model.load_state_dict(torch.load(path if path is not None else self.save_path))
+        """Load the best model from a tar.gz file."""
+        import tarfile
+        import tempfile
+        tar_path = path if path is not None else self.save_path
+        with tarfile.open(tar_path, "r:gz") as tar:
+            member = tar.getmember("best_model.pth") if "best_model.pth" in tar.getnames() else tar.getmembers()[0]
+            with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as tmp_pth:
+                tmp_pth.write(tar.extractfile(member).read())
+                tmp_pth_path = tmp_pth.name
+        model.load_state_dict(torch.load(tmp_pth_path))
+        os.remove(tmp_pth_path)
         if self.verbose:
-            print(f"✅ Best model loaded from {path if path is not None else self.save_path}")
+            print(f"✅ Best model loaded from {tar_path}")
         return model
 
 def insert_before_bos(input_ids, input_embeddings, image_embeddings, bos_token_id, attention_mask=None, labels=None):

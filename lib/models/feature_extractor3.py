@@ -60,83 +60,57 @@ def pooled_swin_features(x: torch.Tensor) -> torch.Tensor:
     raise ValueError(f"Unexpected Swin output shape: {x.shape}")
 
 
-class FeatureExtractor(nn.Module):
-    def __init__(self, cfg, pretrained=True, return_sequence=False, return_output_vector=False, **kwarg):
+class FeatureExtractorV3(nn.Module):
+    def __init__(self, cfg, pretrained=True):
         super().__init__()
-        self.return_sequence = return_sequence
-        self.return_output_vector = return_output_vector
         self.cfg = cfg
 
         self.global_feature_dim, self.global_branch, self.global_is_swin, \
         self.local_feature_dim, self.local_branch, self.local_is_swin = get_model(cfg, pretrained)
 
-        self.backbone_total_dim = self.global_feature_dim + self.local_feature_dim
-
-        logger.info(f"global feature dimension: {self.global_feature_dim}, local feature dimension: {self.local_feature_dim}")
-
-        self.patch_resize = nn.Conv2d(102, 3, kernel_size=1)
-
-
         self.output_dim = 1 if len(cfg.DATASET.TARGET_CLASSES) == 2 else len(cfg.DATASET.TARGET_CLASSES)
+        self.proj_dim = 1024  # 공통 투영 차원
 
-        # projection 0607
-        self.proj_dim = 1024
-        self.feature_proj = nn.Linear(self.backbone_total_dim, self.proj_dim)
-        
-        self.projection_head = nn.Sequential(
-            nn.Linear(self.backbone_total_dim, self.proj_dim),
+        self.global_proj = nn.Sequential(
+            nn.Linear(self.global_feature_dim, self.proj_dim),
             nn.BatchNorm1d(self.proj_dim),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Dropout(0.3),
         )
 
-        #
-        # self.classifier = nn.Sequential(
-        #     nn.Linear(self.global_feature_dim + self.local_feature_dim, 512),
-        #     nn.BatchNorm1d(512),
-        #     nn.ReLU(),
-        #     nn.Dropout(0.5),
-        #     nn.Linear(512, self.output_dim),
-        #     nn.Sigmoid() if self.output_dim == 1 else nn.Identity()
-        # )
-        self.classifier = nn.Sequential(
-            nn.Linear(self.proj_dim, 512),
-            nn.BatchNorm1d(512),
+        self.local_proj = nn.Sequential(
+            nn.Linear(self.local_feature_dim, self.proj_dim),
+            nn.BatchNorm1d(self.proj_dim),
             nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, self.output_dim),
+            nn.Dropout(0.3),
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Linear(self.proj_dim * 2, self.output_dim),
             nn.Sigmoid() if self.output_dim == 1 else nn.Identity()
         )
 
-        # ResRes 실험 이후에 이 classifier 사용
-        # self.classifier = nn.Sequential(
-        #     nn.Linear(self.proj_dim, self.output_dim),
-        #     nn.Sigmoid() if self.output_dim == 1 else nn.Identity()
-        # )
+        self.patch_resize = nn.Conv2d(102, 3, kernel_size=1)
 
+    def forward(self, image: torch.Tensor, patches: torch.Tensor) -> torch.Tensor:
+        # Global
+        global_feat = self.global_branch.forward_features(image) if self.global_is_swin else self.global_branch(image)
+        global_feat = pooled_swin_features(global_feat) if self.global_is_swin else global_feat
+        global_feat = self.global_proj(global_feat)
 
-    def forward(self, image, patches):
-        # global feature
-        x = self.global_branch.forward_features(image) if self.global_is_swin else self.global_branch(image)
-        global_feat = pooled_swin_features(x) if self.global_is_swin else x
-
-        # local feature
+        # Local
         B, N, C, H, W = patches.shape
         patches = patches.view(B, N * C, H, W)
         patches = self.patch_resize(patches) if self.local_is_swin else patches
         patches = F.interpolate(patches, size=(224, 224), mode='bilinear', align_corners=False) if self.local_is_swin else patches
+        local_feat = self.local_branch.forward_features(patches) if self.local_is_swin else self.local_branch(patches)
+        local_feat = pooled_swin_features(local_feat) if self.local_is_swin else local_feat
+        local_feat = self.local_proj(local_feat)
 
-        x = self.local_branch.forward_features(patches) if self.local_is_swin else self.local_branch(patches)
-        local_feat = pooled_swin_features(x) if self.local_is_swin else x
-
+        # Concat and classify
         combined = torch.cat([global_feat, local_feat], dim=1)
-        
-        # proj 0607
-        projected = self.feature_proj(combined)
-        # projected = self.projection_head(combined)
-
-        if self.return_output_vector:
-            return combined
-        return self.classifier(projected)
+        out = self.classifier(combined)
+        return out
 
 
 def freeze_module(module: nn.Module):
@@ -163,7 +137,7 @@ def log_freeze_status(model: nn.Module, logger: logging.Logger, name: str = ""):
         logger.info(f"{status:12} | {name}.{param_name}")
 
 def get_feature_extractor(cfg, is_train, remove_classifier=False, **kwargs):
-    model = FeatureExtractor(cfg, **kwargs)
+    model = FeatureExtractorV3(cfg, **kwargs)
     
     if remove_classifier and hasattr(model, 'classifier'):
         model.classifier = None

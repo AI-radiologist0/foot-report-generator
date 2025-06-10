@@ -314,6 +314,8 @@ class FinalSamplesDataset(Dataset):
         self.is_binary = len(self.target_classes) == 2
         self.abnormal_classify = self.is_binary and 'abnormal' in self.target_classes
 
+        self.class_label_mapping = { 0: self.target_classes[0], 1: self.target_classes[1]}
+
         if self.abnormal_classify:
             self.abnormal_mapping = {'ra': 'abnormal', 'oa': 'abnormal', 'gout': 'abnormal', 'normal': 'normal'}
         else:
@@ -335,6 +337,7 @@ class FinalSamplesDataset(Dataset):
             file_path_key = "file_path" if "file_path" in item.keys() else "file_paths"
             
             self.data[idx] = {
+                "patient_id": item["patient_id"],
                 "file_path": item["merged_image_path"],
                 "left_right_file_path": item["file_paths"],  # 추가!
                 "class_label": class_label,
@@ -359,6 +362,9 @@ class FinalSamplesDataset(Dataset):
 
     def __len__(self):
         return len(self.data)
+    
+    def get_class_name_from_label(self, label):
+        return self.class_label_mapping[label]
 
     def get_labels(self):
         """데이터셋의 라벨만 빠르게 추출 (이미지 로딩 없이)"""
@@ -398,10 +404,17 @@ class FinalSamplesDataset(Dataset):
 
         # 리포트
         report = self._clean_report(entry.get("diagnosis", ""))
+        
+        # 메타 정보 구성
+        meta = {
+            "patient_id": entry['patient_id'],
+            "class_label": entry['class_label']
+        }
+        
 
         if self.use_report:
-            return image, patch_tensor, label, report
-        return image, patch_tensor, label
+            return image, patch_tensor, label, report, meta
+        return image, patch_tensor, label, meta
 
     def generate_patches_from_file_paths(self, file_paths, keypoints_dict, crop_size=(200, 300), patch_size=(224, 224)):
         def extract(image, keypoints_side):
