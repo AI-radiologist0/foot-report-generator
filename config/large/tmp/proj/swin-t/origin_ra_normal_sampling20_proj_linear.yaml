@@ -3,7 +3,7 @@ CUDNN:
   DETERMINISTIC: False
   ENABLED: True
 DATASET:
-  AUGMENT: False
+  AUGMENT: True
   BASIC_TRANSFORM: True
   BBOX_CROP_FLAG: False
   DATA_FORMAT: jpg
@@ -42,6 +42,8 @@ MODEL:
     WITH_ATTN: False
     ONLYCAT: True
     VIEWCAT: False
+    RAW: swin-t
+    PATCH: swin-t
   FREEZE:
     BACKBONE: False
     PROJECTION: False

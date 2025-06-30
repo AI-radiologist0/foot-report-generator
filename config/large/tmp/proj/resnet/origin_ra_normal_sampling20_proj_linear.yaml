@@ -42,6 +42,8 @@ MODEL:
     WITH_ATTN: False
     ONLYCAT: True
     VIEWCAT: False
+    RAW: resnet
+    PATCH: resnet
   FREEZE:
     BACKBONE: False
     PROJECTION: False

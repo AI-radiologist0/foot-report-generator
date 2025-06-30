@@ -7,13 +7,13 @@ DATASET:
   BASIC_TRANSFORM: True
   BBOX_CROP_FLAG: False
   DATA_FORMAT: jpg
-  INCLUDE_CLASSES: ['ra', 'normal']
+  INCLUDE_CLASSES: ['oa', 'normal']
   JSON: data/json/tmp0418/joint/final_samples_both_only_v2.json
   MEAN: [0.1147, 0.1147, 0.1147]
   PKL: data/pkl/output200x300.pkl
   ROOT: 
   STD: [0.2194, 0.2194, 0.2194]
-  TARGET_CLASSES: ['ra', 'normal']
+  TARGET_CLASSES: ['oa', 'normal']
   TEST_SET: valid
   TRAIN_SET: train
   USE_PATCH: True
@@ -42,6 +42,8 @@ MODEL:
     WITH_ATTN: False
     ONLYCAT: True
     VIEWCAT: False
+    RAW: resnet
+    PATCH: resnet
   FREEZE:
     BACKBONE: False
     PROJECTION: False

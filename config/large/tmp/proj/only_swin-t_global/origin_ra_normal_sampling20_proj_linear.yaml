@@ -42,6 +42,8 @@ MODEL:
     WITH_ATTN: False
     ONLYCAT: True
     VIEWCAT: False
+    RAW: swin-t
+    PATCH: none
   FREEZE:
     BACKBONE: False
     PROJECTION: False
