@@ -20,8 +20,19 @@ from utils.utils import stratified_split_dataset
 import models
 
 
-def extract_disease_set(path: str) -> set:
-    return set(re.findall(r"(gout|oa|normal|ra|uncertain)", path.lower()))
+def extract_disease_set(paths) -> set:
+    
+    disease_set = None
+    for path in paths:
+        tmp = set(re.findall(r"(gout|oa|normal|ra|uncertain)", path.lower()))
+        if disease_set is None:
+            disease_set = tmp
+        else:
+            if disease_set != tmp:
+                raise Exception(f"Error Occur!")
+                break
+        
+    return disease_set
 
 
 def flatten_binary_scores(y_score_list):
@@ -29,9 +40,9 @@ def flatten_binary_scores(y_score_list):
             for s in y_score_list]
 
 
-def analyze_log_and_print_stats(log_path: str, output_dir: str = None):
+def analyze_log_and_print_stats(log: str, output_dir: str = None):
     print("🔍 Parsing log file and extracting metrics...")
-    with open(log_path, "r", encoding="utf-8") as f:
+    with open(log, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     results = []
@@ -102,9 +113,9 @@ def analyze_log_and_print_stats(log_path: str, output_dir: str = None):
 
     print("\n==== [Seed별 결과 통계] ====")
     print(f"Accuracy:  mean={acc_mean:.2f}%, std={acc_std:.2f}")
-    print(f"F1:        mean={f1_mean:.2f}%, std={f1_std:.2f}")
     print(f"Precision: mean={prec_mean:.2f}%, std={prec_std:.2f}")
     print(f"Recall:    mean={rec_mean:.2f}%, std={rec_std:.2f}")
+    print(f"F1:        mean={f1_mean:.2f}%, std={f1_std:.2f}")
     print("==========================\n")
 
     # 히스토그램 저장 (output_dir이 주어졌을 때만)
@@ -220,16 +231,24 @@ def run_model_test_and_visualize(df, wandb_paths, cfg, final_output_dir, device,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--log_path", type=str, default="sampling_output/log_sampling_oa_normal_sw_sw.log")
+    parser.add_argument("--log", type=str, nargs='+', required=True, help="분석할 로그 파일 경로 리스트")
+    parser.add_argument("--exp_names", type=str, nargs='+', required=True, help="실험 이름 리스트 (로그 파일 순서와 일치)")
     parser.add_argument("--cfg", type=str, default="config/large/tmp/swin-t/origin_oa_normal_sampling20.yaml")
     parser.add_argument("--output_dir", type=str, default="sampling_output/histogram/swint")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--run_test", action="store_true", help="Run model test and visualization (default: False)")
     args = parser.parse_args()
     update_config(cfg, args)
+    
+    # 각 로그 파일별로 질환명 추출 및 검증
+    disease_sets = []
+    for log_path in args.log:
+        disease_sets.append(extract_disease_set([log_path]))
+    if not all(ds == disease_sets[0] for ds in disease_sets):
+        print(f"❌ 로그 파일별 질환명이 다릅니다: {disease_sets}")
+        exit(1)
+    log_set = disease_sets[0]
 
-    # 질환명 검증
-    log_set = extract_disease_set(args.log_path)
     if hasattr(cfg.DATASET, "TARGET_CLASSES"):
         cfg_set = cfg.DATASET.TARGET_CLASSES
     elif hasattr(cfg.DATASET, "CLASS_NAMES"):
@@ -252,8 +271,74 @@ def main():
     print(f"📁 Output directory created: {final_output_dir}")
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-    # 로그 통계만 분석/출력 + 히스토그램 저장
-    df, wandb_paths = analyze_log_and_print_stats(args.log_path, final_output_dir)
+    all_accs = {}
+    all_f1s = {}
+    all_recalls = {}
+    all_precisions = {}
+    for log_path, exp_name in zip(args.log, args.exp_names):
+        print(f"🔍 Analyzing {exp_name}...")
+        df, _ = analyze_log_and_print_stats(log_path, final_output_dir)
+        all_accs[exp_name] = df["accuracy"].values
+        all_f1s[exp_name] = df["f1"].values
+        all_recalls[exp_name] = df["recall"].values
+        all_precisions[exp_name] = df["precision"].values
+
+    # 모든 지표를 하나의 DataFrame으로 저장
+    metrics_dict = {}
+    for metric_name, metric_dict in zip(
+        ["accuracy", "f1", "recall", "precision"],
+        [all_accs, all_f1s, all_recalls, all_precisions]
+    ):
+        for exp_name, values in metric_dict.items():
+            metrics_dict[f"{exp_name}_{metric_name}"] = pd.Series(values)
+    df_metrics = pd.DataFrame(metrics_dict)
+    metrics_csv_path = os.path.join(final_output_dir, "metrics_boxplot_data.csv")
+    df_metrics.to_csv(metrics_csv_path, index=False)
+    print(f"📄 모든 지표 데이터가 CSV로 저장되었습니다: {metrics_csv_path}")
+
+    # Boxplot 그리기 및 저장 (accuracy만)
+    plt.figure(figsize=(8, 6))
+    plt.boxplot(all_accs.values(), labels=all_accs.keys())
+    plt.ylabel("Accuracy (%)")
+    plt.title(f"{disease_name}: Model Comparison")
+    plt.grid(axis='y', linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    boxplot_path = os.path.join(final_output_dir, "accuracy_boxplot.png")
+    plt.savefig(boxplot_path)
+    plt.close()
+    print(f"📦 Boxplot saved to: {boxplot_path}")
+
+    # 여러 지표를 한 plot에 boxplot으로 그리기
+    exp_names = list(all_accs.keys())
+    n_exp = len(exp_names)
+    x = np.arange(n_exp)
+    width = 0.18  # 박스 폭
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']  # Accuracy, F1, Recall, Precision
+    plt.figure(figsize=(10, 6))
+    # Accuracy
+    bp1 = plt.boxplot([all_accs[k] for k in exp_names], positions=x-width*1.5, widths=width, patch_artist=True,
+                boxprops=dict(facecolor=colors[0], alpha=0.5), medianprops=dict(color='black'), labels=['']*n_exp)
+    # F1
+    bp2 = plt.boxplot([all_f1s[k] for k in exp_names], positions=x-width*0.5, widths=width, patch_artist=True,
+                boxprops=dict(facecolor=colors[1], alpha=0.5), medianprops=dict(color='black'), labels=['']*n_exp)
+    # Recall
+    bp3 = plt.boxplot([all_recalls[k] for k in exp_names], positions=x+width*0.5, widths=width, patch_artist=True,
+                boxprops=dict(facecolor=colors[2], alpha=0.5), medianprops=dict(color='black'), labels=['']*n_exp)
+    # Precision
+    bp4 = plt.boxplot([all_precisions[k] for k in exp_names], positions=x+width*1.5, widths=width, patch_artist=True,
+                boxprops=dict(facecolor=colors[3], alpha=0.5), medianprops=dict(color='black'), labels=exp_names)
+    plt.xticks(x, exp_names)
+    plt.ylabel("Score (%)")
+    plt.title(f"{disease_name}: Model Comparison (Accuracy, F1, Recall, Precision)")
+    plt.grid(axis='y', linestyle='--', alpha=0.6)
+    from matplotlib.patches import Patch
+    legend_handles = [Patch(facecolor=colors[i], edgecolor='black', label=label) for i, label in enumerate(['Accuracy', 'F1', 'Recall', 'Precision'])]
+    plt.legend(handles=legend_handles)
+    plt.tight_layout()
+    all_metrics_boxplot_path = os.path.join(final_output_dir, "all_metrics_boxplot.png")
+    plt.savefig(all_metrics_boxplot_path)
+    plt.close()
+    print(f"📦 All metrics boxplot saved to: {all_metrics_boxplot_path}")
 
     # 모델 테스트 및 시각화는 flag로 제어
     if args.run_test:
