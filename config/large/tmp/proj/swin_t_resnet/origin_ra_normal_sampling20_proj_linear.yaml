@@ -17,6 +17,7 @@ DATASET:
   TEST_SET: valid
   TRAIN_SET: train
   USE_PATCH: True
+  CONCAT_PATCH: True
   USE_RAW: True
   USE_PKL: False
   REPORT: False
@@ -36,7 +37,7 @@ KFOLD:
 LOG_DIR: 
 MODEL:
   INIT_WEIGHTS: True
-  NAME: feature_extractor3
+  NAME: two_branch_model
   PRETRAINED: True
   EXTRA:
     WITH_ATTN: False

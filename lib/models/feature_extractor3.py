@@ -12,11 +12,10 @@ def create_swin_model(variant, pretrained):
     model = timm.create_model(variant, pretrained=pretrained)
     return model, model.num_features
 
-def create_resnet_model(pretrained, in_channels=3):
+def create_resnet_model(pretrained, in_channels=1):
     model = models.resnet50(pretrained=pretrained)
     model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
     dim = model.fc.in_features
-    model.fc = nn.Identity()
     return model, dim
 
 
@@ -24,8 +23,7 @@ def get_model(cfg, pretrained=True):
     raw_type = cfg.MODEL.EXTRA.RAW.lower() if cfg.MODEL.EXTRA.RAW is not None else None
     patch_type = cfg.MODEL.EXTRA.PATCH.lower() if cfg.MODEL.EXTRA.PATCH is not None else None
 
-
-    def load_model(model_type: str, in_channels: int = 3):
+    def load_model(model_type: str, in_channels: int = 1):
         is_swin = 'swin' in model_type
         if is_swin:
             model = timm.create_model(model_type, pretrained=pretrained)
@@ -35,24 +33,25 @@ def get_model(cfg, pretrained=True):
             model = models.resnet50(pretrained=pretrained)
             model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
             dim = model.fc.in_features
-            model.fc = nn.Identity()
+            # feature extractor만 사용 (fc 제외)
+            model = torch.nn.Sequential(*list(model.children())[:-1])
         elif model_type == "none":
             return 0, None, False
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
         return dim, model, is_swin
 
-    # Global
+    # Global (원본): Swin, 3채널
     global_model_type = 'swin_tiny_patch4_window7_224' if raw_type == 'swin-t' else 'resnet'
-    global_dim, global_model, global_is_swin = load_model(global_model_type)
+    global_dim, global_model, global_is_swin = load_model(global_model_type, in_channels=3)
 
-    # Local
+    # Local (패치): ResNet, 1채널
     if patch_type is None or patch_type == 'none':
-        local_dim, local_model, local_is_swin = load_model("none")
+        local_dim, local_model, local_is_swin = load_model("none", in_channels=1)
     else:
         patch_model_type = 'swin_tiny_patch4_window7_224' if patch_type == 'swin-t' else 'resnet'
-        in_channels = 3 if 'swin' in patch_model_type else 102
-        local_dim, local_model, local_is_swin = load_model(patch_model_type, in_channels)
+        patch_in_channels = 3 if 'swin' in patch_model_type else 1
+        local_dim, local_model, local_is_swin = load_model(patch_model_type, in_channels=patch_in_channels)
 
     return global_dim, global_model, global_is_swin, local_dim, local_model, local_is_swin
 
@@ -117,10 +116,18 @@ class FeatureExtractorV3(nn.Module):
     def forward(self, image: torch.Tensor, patches: torch.Tensor) -> torch.Tensor:
         # Global
         if self.global_branch is not None:
-            global_feat = self.global_branch.forward_features(image) if self.global_is_swin else self.global_branch(image)
-            global_feat = pooled_swin_features(global_feat) if self.global_is_swin else global_feat
-            global_feat = self.global_proj(global_feat)
-
+            if self.global_is_swin:
+                # 1채널 이미지를 3채널로 복제
+                if image.shape[1] == 1:
+                    image = image.repeat(1, 3, 1, 1)
+                global_feat = self.global_branch.forward_features(image)
+                global_feat = pooled_swin_features(global_feat)
+            else:
+                # ResNet: avgpool + flatten
+                x = self.global_branch(image)
+                global_feat = torch.flatten(x, 1)
+            if self.global_proj is not None:
+                global_feat = self.global_proj(global_feat)
         else:
             global_feat = None
 
@@ -131,23 +138,47 @@ class FeatureExtractorV3(nn.Module):
             patches = self.patch_resize(patches) if self.local_is_swin else patches
             patches = F.interpolate(patches, size=(224, 224), mode='bilinear', align_corners=False) if self.local_is_swin else patches
         if self.local_branch is not None:
-            local_feat = self.local_branch.forward_features(patches) if self.local_is_swin else self.local_branch(patches)
-            local_feat = pooled_swin_features(local_feat) if self.local_is_swin else local_feat
-            local_feat = self.local_proj(local_feat)
+            if self.local_is_swin:
+                local_feat = self.local_branch.forward_features(patches)
+                local_feat = pooled_swin_features(local_feat)
+            else:
+                # ResNet(nn.Sequential): avgpool+flatten만 사용
+                x = self.local_branch(patches)
+                local_feat = torch.flatten(x, 1)
+            if self.local_proj is not None:
+                local_feat = self.local_proj(local_feat)
         else:
             local_feat = None
 
         # Concat and classify
-        if global_feat is not None and local_feat is not None:
+        if global_feat is not None and local_feat is not None and self.classifier is not None:
             combined = torch.cat([global_feat, local_feat], dim=1)
             out = self.classifier(combined)
-        elif global_feat is not None:
+        elif global_feat is not None and self.classifier is not None:
             out = self.classifier(global_feat)
-        elif local_feat is not None:
+        elif local_feat is not None and self.classifier is not None:
             out = self.classifier(local_feat)
         else:
-            raise ValueError("No features to classify")
+            raise ValueError("No features to classify or classifier is None")
         return out
+
+    def log_model_info(self, cfg, logger):
+        from .utils import log_model_configuration, log_branch_details, log_freeze_status, log_model_parameters
+        log_model_configuration(cfg, logger)
+        log_branch_details(self, logger)
+        logger.info("🔒 [Freeze Status Details]")
+        logger.info("=" * 60)
+        if hasattr(self, 'global_branch') and self.global_branch is not None:
+            log_freeze_status(self.global_branch, logger, "Global Branch")
+        if hasattr(self, 'local_branch') and self.local_branch is not None:
+            log_freeze_status(self.local_branch, logger, "Local Branch")
+        if hasattr(self, 'global_proj') and self.global_proj is not None:
+            log_freeze_status(self.global_proj, logger, "Global Projection")
+        if hasattr(self, 'local_proj') and self.local_proj is not None:
+            log_freeze_status(self.local_proj, logger, "Local Projection")
+        if hasattr(self, 'classifier') and self.classifier is not None:
+            log_freeze_status(self.classifier, logger, "Classifier")
+        log_model_parameters(self, logger)
 
 
 def freeze_module(module: nn.Module):
@@ -288,8 +319,10 @@ def get_feature_extractor(cfg, is_train, remove_classifier=False, **kwargs):
     # 3. Freeze 상태 로깅
     logger.info("🔒 [Freeze Status Details]")
     logger.info("=" * 60)
-    log_freeze_status(model.global_branch, logger, "Global Branch")
-    log_freeze_status(model.local_branch, logger, "Local Branch")
+    if model.global_branch is not None:
+        log_freeze_status(model.global_branch, logger, "Global Branch")
+    if model.local_branch is not None:
+        log_freeze_status(model.local_branch, logger, "Local Branch")
     if hasattr(model, 'global_proj') and model.global_proj is not None:
         log_freeze_status(model.global_proj, logger, "Global Projection")
     if hasattr(model, 'local_proj') and model.local_proj is not None:

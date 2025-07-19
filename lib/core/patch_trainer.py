@@ -36,9 +36,9 @@ class PatchTrainer:
         self.target_classes = cfg.DATASET.TARGET_CLASSES
         self.is_binary = len(self.target_classes) == 2
 
-        # 🔹 Loss 자동 적용 (BCE vs Focal Loss)
+        # 🔹 Loss 자동 적용 (BCEWithLogits vs Focal Loss)
         if cfg.TRAIN.LOSS == 'BCELoss':
-            self.criterion = nn.BCELoss()
+            self.criterion = nn.BCEWithLogitsLoss()
         elif cfg.TRAIN.LOSS == 'FocalLoss':
             self.criterion = FocalLoss(cfg)
 
@@ -55,18 +55,21 @@ class PatchTrainer:
         end = time.time()
 
         with tqdm(enumerate(data_loader), desc="Training", total=len(data_loader)) as pbar:
-            
             for i, (images, patches, labels, meta) in pbar:
                 data_time.update(time.time() - end)
                 images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
 
                 # 🔹 이진 분류(BCE) vs 다중 분류(CE) 적용
                 if self.is_binary:
-                    labels = labels.float() # BCE Loss 적용을 위해 차원 확장
+                    labels = labels.float()
                     outputs = self.model(images, patches)
+                    probs = torch.sigmoid(outputs)
+                    preds = (probs > 0.5).float()
                 else:
                     labels = labels.long()
-                    outputs = self.model(images, patches)  # 다중 분류에서는 Softmax 미적용 (CrossEntropy Loss가 내부적으로 적용)
+                    outputs = self.model(images, patches)
+                    probs = torch.softmax(outputs, dim=1)
+                    preds = torch.argmax(probs, dim=1)
 
                 loss = criterion(outputs, labels)
 
@@ -77,12 +80,6 @@ class PatchTrainer:
                 loss_meter.update(loss.item(), images.size(0))
                 batch_time.update(time.time() - end)
                 end = time.time()
-
-                # 🔹 정확도 계산 (이진 분류 & 다중 분류)
-                if self.is_binary:
-                    preds = (outputs > 0.5).float()  # BCE에서는 0.5 기준으로 분류
-                else:
-                    preds = torch.argmax(outputs, dim=1)  # 다중 분류에서는 argmax 사용
 
                 correct += (preds == labels).sum().item()
                 total += labels.size(0)
@@ -100,7 +97,6 @@ class PatchTrainer:
                 writer.add_scalar('train_loss', loss_meter.val, global_steps)
                 self.writer_dict['train_global_steps'] = global_steps + 1
                 pbar.set_postfix(loss=loss_meter.avg, accuracy=correct/total)
-                
 
         train_acc = correct / total
         acc_meter.update(correct, total)
@@ -126,41 +122,38 @@ class PatchTrainer:
             for images, patches, labels, meta in tqdm(val_loader):
                 images, patches, labels = images.to(self.device), patches.to(self.device), labels.to(self.device)
 
-                # 🔹 이진 분류(BCE) vs 다중 분류(CE) 적용
                 if self.is_binary:
-                    labels = labels.float()  # BCE Loss 적용을 위해 차원 확장
-                    outputs = model(images, patches)  # Sigmoid 적용
+                    labels = labels.float()
+                    outputs = model(images, patches)
+                    probs = torch.sigmoid(outputs)
+                    preds = (probs > 0.5).float()
                 else:
                     labels = labels.long()
-                    outputs = model(images, patches)  # Softmax 미적용 (CrossEntropy Loss 내부적으로 적용)
+                    outputs = model(images, patches)
+                    probs = torch.softmax(outputs, dim=1)
+                    preds = torch.argmax(probs, dim=1)
 
                 loss = criterion(outputs, labels)
                 losses.update(loss.item(), images.size(0))
-
-                # 🔹 정확도 계산 (이진 분류 & 다중 분류)
-                if self.is_binary:
-                    preds = (outputs > 0.5).float()  # BCE에서는 0.5 기준으로 분류
-                else:
-                    preds = torch.argmax(outputs, dim=1)  # 다중 분류에서는 argmax 사용
 
                 correct = (preds == labels).sum().item()
                 total = labels.size(0)
                 accuracy = correct / total
                 accuracies.update(accuracy, total)
 
-                all_probs.extend(outputs.cpu().numpy())
+                all_probs.extend(probs.cpu().numpy())
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
 
         # 🔹 Precision, Recall, F1 Score 계산
         if self.is_binary:
-            precision = precision_score(all_labels, all_preds, average='binary', zero_division=0)
-            recall = recall_score(all_labels, all_preds, average='binary', zero_division=0)
-            f1 = f1_score(all_labels, all_preds, average='binary', zero_division=0)
+            precision = precision_score(all_labels, all_preds, average='binary', zero_division='warn')
+            recall = recall_score(all_labels, all_preds, average='binary', zero_division='warn')
+            f1 = f1_score(all_labels, all_preds, average='binary', zero_division='warn')
         else:
-            precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
-            recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
-            f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+            precision = precision_score(all_labels, all_preds, average='macro', zero_division='warn')
+            recall = recall_score(all_labels, all_preds, average='macro', zero_division='warn')
+            f1 = f1_score(all_labels, all_preds, average='macro', zero_division='warn')
 
         # TensorBoard 기록
         if writer_dict:
@@ -199,7 +192,7 @@ class PatchTrainer:
                 if self.is_binary:
                     label = label.float()
                     output = model(image, patch)
-                    prob = output
+                    prob = torch.sigmoid(output)
                     pred = (prob > 0.5).float()
                 else:
                     label = label.long()
@@ -221,13 +214,13 @@ class PatchTrainer:
 
         # Metric 계산
         if self.is_binary:
-            precision = precision_score(all_labels, all_preds, average='binary', zero_division=0)
-            recall = recall_score(all_labels, all_preds, average='binary', zero_division=0)
-            f1 = f1_score(all_labels, all_preds, average='binary', zero_division=0)
+            precision = precision_score(all_labels, all_preds, average='binary', zero_division='warn')
+            recall = recall_score(all_labels, all_preds, average='binary', zero_division='warn')
+            f1 = f1_score(all_labels, all_preds, average='binary', zero_division='warn')
         else:
-            precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
-            recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
-            f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+            precision = precision_score(all_labels, all_preds, average='macro', zero_division='warn')
+            recall = recall_score(all_labels, all_preds, average='macro', zero_division='warn')
+            f1 = f1_score(all_labels, all_preds, average='macro', zero_division='warn')
 
         # TensorBoard 기록
         if writer_dict:

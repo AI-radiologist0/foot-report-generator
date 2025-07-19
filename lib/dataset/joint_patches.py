@@ -11,26 +11,85 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm import tqdm
 from pycocomedical import COCOMedical
+import torch.nn.functional as F
 
 
 from utils.utils import prepare_binary_data, prepare_data, prepare_data_with_seed
 
-# Image transformations (전역 변수로 변경)
-train_transform = transforms.Compose([
+# 3채널용 transform (원본 이미지)
+image_transform_rgb = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(p=0.5),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
 ])
 
-patch_transform = transforms.Compose([
-    transforms.Resize((112, 112)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-])
+# 1채널용 transform (패치)
+def get_patch_transform_gray(concat_patch):
+    size = (28, 28) if concat_patch else (112, 112)
+    return transforms.Compose([
+        transforms.Resize(size),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5], std=[0.5])
+    ])
+
+def check_image_channels(image_path):
+    """
+    이미지의 각 채널값이 동일한지 확인하는 유틸리티 함수
+    
+    Args:
+        image_path: 이미지 파일 경로
+        
+    Returns:
+        dict: 채널 정보를 담은 딕셔너리
+    """
+    try:
+        img = Image.open(image_path)
+        original_mode = img.mode
+        original_size = img.size
+        
+        # RGB로 변환
+        img_rgb = img.convert("RGB")
+        rgb_array = np.array(img_rgb)
+        
+        # 각 채널 추출
+        r_channel = rgb_array[:, :, 0]
+        g_channel = rgb_array[:, :, 1]
+        b_channel = rgb_array[:, :, 2]
+        
+        # 채널 간 차이 계산
+        r_g_diff = np.abs(r_channel - g_channel)
+        r_b_diff = np.abs(r_channel - b_channel)
+        g_b_diff = np.abs(g_channel - b_channel)
+        
+        # Grayscale 여부 판단 (완전히 동일한 경우만)
+        is_grayscale = np.max(r_g_diff) == 0 and np.max(r_b_diff) == 0 and np.max(g_b_diff) == 0
+        
+        return {
+            'file_path': image_path,
+            'original_mode': original_mode,
+            'original_size': original_size,
+            'rgb_shape': rgb_array.shape,
+            'r_g_max_diff': np.max(r_g_diff),
+            'r_b_max_diff': np.max(r_b_diff),
+            'g_b_max_diff': np.max(g_b_diff),
+            'r_g_mean_diff': np.mean(r_g_diff),
+            'r_b_mean_diff': np.mean(r_b_diff),
+            'g_b_mean_diff': np.mean(g_b_diff),
+            'is_grayscale': is_grayscale,
+            'r_mean': np.mean(r_channel),
+            'g_mean': np.mean(g_channel),
+            'b_mean': np.mean(b_channel)
+        }
+        
+    except Exception as e:
+        return {
+            'file_path': image_path,
+            'error': str(e)
+        }
 
 class FootPatchesDataset(Dataset):
-    def __init__(self, config, data, image_transform=train_transform, patch_transform=patch_transform):
+    def __init__(self, config, data, image_transform=image_transform_rgb, patch_transform=None):
         """
         - Lazy Loading을 적용한 FootPatchesDataset
         - Patch Tensor 유지
@@ -43,8 +102,8 @@ class FootPatchesDataset(Dataset):
             patch_transform: 패치 변환 함수
         """
         self.data = data
-        self.image_transform = image_transform
-        self.patch_transform = patch_transform
+        self.image_transform = image_transform  # 3채널용
+        self.patch_transform = patch_transform if patch_transform is not None else get_patch_transform_gray(config.DATASET.CONCAT_PATCH) # 1채널용
 
         self.use_raw = config.DATASET.USE_RAW
         self.use_patches = config.DATASET.USE_PATCH
@@ -72,6 +131,70 @@ class FootPatchesDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+    def analyze_channels(self, max_samples=50):
+        """
+        데이터셋의 이미지들을 분석하여 채널 정보를 확인
+        
+        Args:
+            max_samples: 분석할 최대 샘플 수
+            
+        Returns:
+            dict: 분석 결과
+        """
+        print(f"데이터셋 채널 분석 시작 (최대 {max_samples}개 샘플)")
+        
+        results = []
+        grayscale_count = 0
+        non_grayscale_count = 0
+        
+        for i, entry in enumerate(tqdm(self.data[:max_samples], total=min(max_samples, len(self.data)))):
+            file_path = entry['file_path']
+            result = check_image_channels(file_path)
+            results.append(result)
+            
+            if 'error' not in result:
+                if result['is_grayscale']:
+                    grayscale_count += 1
+                else:
+                    non_grayscale_count += 1
+        
+        # 결과 분석
+        print(f"\n=== 채널 분석 결과 ===")
+        print(f"총 분석된 이미지: {len(results)}")
+        print(f"Grayscale 이미지: {grayscale_count}")
+        print(f"Non-grayscale 이미지: {non_grayscale_count}")
+        print(f"Grayscale 비율: {grayscale_count/len(results)*100:.2f}%")
+        
+        # Non-grayscale 이미지들의 상세 정보
+        non_grayscale_results = [r for r in results if 'error' not in r and not r['is_grayscale']]
+        
+        if non_grayscale_results:
+            print(f"\n=== Non-grayscale 이미지 상세 정보 (처음 5개) ===")
+            for i, result in enumerate(non_grayscale_results[:5]):
+                print(f"\n{i+1}. {os.path.basename(result['file_path'])}")
+                print(f"   원본 모드: {result['original_mode']}")
+                print(f"   R-G 최대 차이: {result['r_g_max_diff']}")
+                print(f"   R-B 최대 차이: {result['r_b_max_diff']}")
+                print(f"   G-B 최대 차이: {result['g_b_max_diff']}")
+                print(f"   R 평균: {result['r_mean']:.2f}")
+                print(f"   G 평균: {result['g_mean']:.2f}")
+                print(f"   B 평균: {result['b_mean']:.2f}")
+        
+        # 에러가 있는 이미지들
+        error_results = [r for r in results if 'error' in r]
+        if error_results:
+            print(f"\n=== 에러가 발생한 이미지들 ===")
+            for result in error_results:
+                print(f"  {os.path.basename(result['file_path'])}: {result['error']}")
+        
+        return {
+            'total_analyzed': len(results),
+            'grayscale_count': grayscale_count,
+            'non_grayscale_count': non_grayscale_count,
+            'grayscale_ratio': grayscale_count/len(results)*100 if len(results) > 0 else 0,
+            'results': results
+        }
+
     def __getitem__(self, idx):
         """
         필요할 때만 데이터를 로드하는 Lazy Loading 방식 적용
@@ -92,24 +215,29 @@ class FootPatchesDataset(Dataset):
         meta['label'] = label
         meta['patient_id'] = entry['patient_id']
 
-        # **Lazy Load: 원본 이미지 로드**
+        # **원본 이미지는 3채널로 로딩**
         image = Image.open(file_path).convert("RGB")
         image = self.image_transform(image)
 
-        # **Lazy Load: Patch 이미지 로드 및 변환**
+        # **패치는 1채널로 로딩**
         patch_tensors = []
         for patch in patches[:34]:  # 최대 34개의 패치 사용
-            patch_img = Image.fromarray(np.array(patch))
-            patch_tensors.append(self.patch_transform(patch_img))
-
+            patch_img = Image.fromarray(np.array(patch)).convert("L")  # 1채널로 변환
+            patch_tensor = self.patch_transform(patch_img)
+            patch_tensors.append(patch_tensor)
         # **패치 개수가 34개보다 적을 경우 Zero Padding 추가**
         num_patches = len(patch_tensors)
         if num_patches < 34:
-            padding = [torch.zeros_like(patch_tensors[0])] * (34 - num_patches)
+            if num_patches > 0:
+                padding = [torch.zeros_like(patch_tensors[0])] * (34 - num_patches)
+            else:
+                padding = [torch.zeros(1, 112, 112)] * 34
             patch_tensors.extend(padding)
-
-        # **패치 텐서 병합 (최종 Shape: (34*3, 112, 112))**
-        patch_tensor = torch.stack(patch_tensors, dim=0) if patch_tensors else torch.zero(34, 3, 112, 112)
+        # **패치 텐서 병합 (최종 Shape: (34, 1, 112, 112))**
+        if patch_tensors:
+            patch_tensor = torch.stack(patch_tensors, dim=0)
+        else:
+            patch_tensor = torch.zeros(34, 1, 112, 112)
         # patch_tensor = torch.cat(patch_tensors, dim=0) if patch_tensors else torch.zeros(34 * 3, 112, 112)
 
         # **Binary vs Multi-class 레이블 변환**
@@ -123,7 +251,7 @@ class FootPatchesDataset(Dataset):
         return image, patch_tensor, label, meta
 
 class FootPatchesDatasetWithJson(Dataset):
-    def __init__(self, cfg, image_transform=train_transform, patch_transform=patch_transform):
+    def __init__(self, cfg, image_transform=image_transform_rgb, patch_transform=None):
         """
         JSON 기반 Lazy Loading FootPatchesDataset
 
@@ -133,8 +261,8 @@ class FootPatchesDatasetWithJson(Dataset):
             patch_transform: 패치 변환 함수
         """
         self.cfg = cfg
-        self.image_transform = image_transform
-        self.patch_transform = patch_transform
+        self.image_transform = image_transform  # 3채널용
+        self.patch_transform = patch_transform if patch_transform is not None else get_patch_transform_gray(cfg.DATASET.CONCAT_PATCH) # 1채널용
 
         self.use_raw = cfg.DATASET.USE_RAW
         self.use_patches = cfg.DATASET.USE_PATCH
@@ -192,8 +320,20 @@ class FootPatchesDatasetWithJson(Dataset):
         patches = self.generate_patches_from_keypoints(file_path, entry['keypoint_id'])
 
         # Transform patches
-        patch_tensors = [self.patch_transform(Image.fromarray(p)) for p in patches]
-        patch_tensor = torch.stack(patch_tensors, dim=0) if patch_tensors else torch.zero(34, 3, 112, 112)
+        patch_tensors = []
+        for p in patches:
+            patch_tensor = self.patch_transform(Image.fromarray(p).convert("L"))
+            patch_tensors.append(patch_tensor)
+        if len(patch_tensors) < 34:
+            if len(patch_tensors) > 0:
+                padding = [torch.zeros_like(patch_tensors[0])] * (34 - len(patch_tensors))
+            else:
+                padding = [torch.zeros(1, 112, 112)] * 34
+            patch_tensors.extend(padding)
+        if patch_tensors:
+            patch_tensor = torch.stack(patch_tensors, dim=0)
+        else:
+            patch_tensor = torch.zeros(34, 1, 112, 112)
         # patch_tensor = torch.cat(patch_tensors, dim=0)
 
         if self.is_binary:
@@ -291,19 +431,22 @@ class FootPatchesDatasetWithJson(Dataset):
     
 
 class FinalSamplesDataset(Dataset):
-    def __init__(self, cfg, image_transform=train_transform, patch_transform=patch_transform):
+    def __init__(self, cfg, image_transform=image_transform_rgb, patch_transform=None, augment_transform=None, augment_ratio=1):
         """
         Final Samples JSON 기반 Lazy Loading Dataset
         """
         logger = logging.getLogger()
         self.cfg = cfg
-        self.image_transform = image_transform
-        self.patch_transform = patch_transform
+        self.image_transform = image_transform  # 3채널용
+        self.patch_transform = patch_transform if patch_transform is not None else get_patch_transform_gray(cfg.DATASET.CONCAT_PATCH) # 1채널용
+        self.augment_transform = augment_transform
+        self.augment_ratio = augment_ratio
 
         self.use_raw = cfg.DATASET.USE_RAW
         self.use_patches = cfg.DATASET.USE_PATCH
         self.target_classes = cfg.DATASET.TARGET_CLASSES
         self.use_report = cfg.DATASET.REPORT
+        self.concat_patches = cfg.DATASET.CONCAT_PATCH
 
         if isinstance(self.target_classes, str):
             self.target_classes = self.target_classes.split(",")
@@ -345,6 +488,8 @@ class FinalSamplesDataset(Dataset):
                 "keypoints": item.get("keypoints", {})  # left/right 모두
             }
         
+        
+        
         # prepare_data 적용
         if self.is_binary:
             # ✅ 시드 기반 반복 실험일 경우
@@ -359,10 +504,13 @@ class FinalSamplesDataset(Dataset):
 
         else:
             self.data = self.data
+        
+        self.total_len = len(self.data) * (1 + self.augment_ratio)
+
 
     def __len__(self):
-        return len(self.data)
-    
+        return self.total_len
+
     def get_class_name_from_label(self, label):
         return self.class_label_mapping[label]
 
@@ -375,13 +523,85 @@ class FinalSamplesDataset(Dataset):
             labels.append(label)
         return labels
 
+    def analyze_channels(self, max_samples=50):
+        """
+        데이터셋의 이미지들을 분석하여 채널 정보를 확인
+        
+        Args:
+            max_samples: 분석할 최대 샘플 수
+            
+        Returns:
+            dict: 분석 결과
+        """
+        print(f"FinalSamplesDataset 채널 분석 시작 (최대 {max_samples}개 샘플)")
+        
+        results = []
+        grayscale_count = 0
+        non_grayscale_count = 0
+        
+        # 데이터를 리스트로 변환하여 인덱싱
+        data_list = list(self.data.values())
+        
+        for i, entry in enumerate(tqdm(data_list[:max_samples], total=min(max_samples, len(data_list)))):
+            file_path = entry['file_path']
+            result = check_image_channels(file_path)
+            results.append(result)
+            
+            if 'error' not in result:
+                if result['is_grayscale']:
+                    grayscale_count += 1
+                else:
+                    non_grayscale_count += 1
+        
+        # 결과 분석
+        print(f"\n=== 채널 분석 결과 ===")
+        print(f"총 분석된 이미지: {len(results)}")
+        print(f"Grayscale 이미지: {grayscale_count}")
+        print(f"Non-grayscale 이미지: {non_grayscale_count}")
+        print(f"Grayscale 비율: {grayscale_count/len(results)*100:.2f}%")
+        
+        # Non-grayscale 이미지들의 상세 정보
+        non_grayscale_results = [r for r in results if 'error' not in r and not r['is_grayscale']]
+        
+        if non_grayscale_results:
+            print(f"\n=== Non-grayscale 이미지 상세 정보 (처음 5개) ===")
+            for i, result in enumerate(non_grayscale_results[:5]):
+                print(f"\n{i+1}. {os.path.basename(result['file_path'])}")
+                print(f"   원본 모드: {result['original_mode']}")
+                print(f"   R-G 최대 차이: {result['r_g_max_diff']}")
+                print(f"   R-B 최대 차이: {result['r_b_max_diff']}")
+                print(f"   G-B 최대 차이: {result['g_b_max_diff']}")
+                print(f"   R 평균: {result['r_mean']:.2f}")
+                print(f"   G 평균: {result['g_mean']:.2f}")
+                print(f"   B 평균: {result['b_mean']:.2f}")
+        
+        # 에러가 있는 이미지들
+        error_results = [r for r in results if 'error' in r]
+        if error_results:
+            print(f"\n=== 에러가 발생한 이미지들 ===")
+            for result in error_results:
+                print(f"  {os.path.basename(result['file_path'])}: {result['error']}")
+        
+        return {
+            'total_analyzed': len(results),
+            'grayscale_count': grayscale_count,
+            'non_grayscale_count': non_grayscale_count,
+            'grayscale_ratio': grayscale_count/len(results)*100 if len(results) > 0 else 0,
+            'results': results
+        }
+
 
     def __getitem__(self, idx):
-        entry = self.data[idx]
+        # 원본 or 증강본 선택
+        data_idx = idx % len(self.data)
+        is_aug = idx // len(self.data) > 0
 
-        # 전체 이미지 (merged)
+        entry = self.data[data_idx]
         image = Image.open(entry['file_path']).convert("RGB")
-        image = self.image_transform(image)
+        if is_aug and self.augment_transform is not None:
+            image = self.augment_transform(image)
+        else:
+            image = self.image_transform(image)
 
         # patches는 따로 생성
         patches = self.generate_patches_from_file_paths(
@@ -390,8 +610,20 @@ class FinalSamplesDataset(Dataset):
         )
 
         # patch transform
-        patch_tensors = [self.patch_transform(Image.fromarray(p)) for p in patches]
-        patch_tensor = torch.stack(patch_tensors, dim=0) if patch_tensors else torch.zeros(34, 3, 112, 112)
+        patch_tensors = []
+        for p in patches:
+            patch_tensor = self.patch_transform(Image.fromarray(p).convert("L"))
+            patch_tensors.append(patch_tensor)
+        if len(patch_tensors) < 34:
+            if len(patch_tensors) > 0:
+                padding = [torch.zeros_like(patch_tensors[0])] * (34 - len(patch_tensors))
+            else:
+                padding = [torch.zeros(1, 112, 112)] * 34
+            patch_tensors.extend(padding)
+        if patch_tensors:
+            patch_tensor = torch.stack(patch_tensors, dim=0)
+        else:
+            patch_tensor = torch.zeros(34, 1, 112, 112)
 
         # 레이블 변환
         label_str = self.abnormal_mapping[entry['class_label'].lower()] if self.abnormal_mapping else entry['class_label'].lower()
@@ -411,6 +643,20 @@ class FinalSamplesDataset(Dataset):
             "class_label": entry['class_label']
         }
         
+        if self.concat_patches:
+            # patch_tensors: (34, 1, patch_size, patch_size) 또는 list
+            left_patches = patch_tensors[:17]
+            right_patches = patch_tensors[17:]
+            if isinstance(left_patches, list):
+                left_patches = torch.stack(left_patches, dim=0)
+            if isinstance(right_patches, list):
+                right_patches = torch.stack(right_patches, dim=0)
+            patch_tensor = fill_and_pad_patch_grid(left_patches, right_patches, patch_size=28, final_size=224)
+            # 1채널 → 3채널 복제
+            if patch_tensor.shape[0] == 1:
+                patch_tensor = patch_tensor.repeat(3, 1, 1)
+        else:
+            patch_tessor = patch_tensor
 
         if self.use_report:
             return image, patch_tensor, label, report, meta
@@ -517,3 +763,48 @@ class FinalSamplesDataset(Dataset):
         final_text = '. '.join(sentences) + '.'
         final_text = final_text.strip() + ' ' + eos_token
         return final_text
+
+
+def fill_patch_grid(left_patches, right_patches, patch_size=28):
+    grid = torch.zeros((1, 8*patch_size, 5*patch_size), dtype=left_patches.dtype, device=left_patches.device)
+
+    # left
+    left_indices = [
+        (0,0), (1,0), (2,0), (0,1), (1,1), (2,1), (0,2), (1,2), (2,2), (0,3), (1,3), (0,4), (1,4)
+    ]
+    # UCB, UNB는 같은 패치를 두 칸에 넣음
+    # left_patches[13] = UCB, [14] = UNB, [15]=DNB, [16]=DCB
+    grid[:, 2*patch_size:3*patch_size, 3*patch_size:4*patch_size] = left_patches[13]  # UCB
+    grid[:, 2*patch_size:3*patch_size, 4*patch_size:5*patch_size] = left_patches[13]  # UCB
+    grid[:, 3*patch_size:4*patch_size, 0*patch_size:1*patch_size] = left_patches[14]  # UNB
+    grid[:, 3*patch_size:4*patch_size, 1*patch_size:2*patch_size] = left_patches[14]  # UNB
+    grid[:, 3*patch_size:4*patch_size, 2*patch_size:3*patch_size] = left_patches[15]  # DNB
+    grid[:, 3*patch_size:4*patch_size, 3*patch_size:4*patch_size] = left_patches[16]  # DCB
+
+    for i, (r, c) in enumerate(left_indices):
+        grid[:, r*patch_size:(r+1)*patch_size, c*patch_size:(c+1)*patch_size] = left_patches[i]
+
+    # right
+    right_indices = [
+        (4,0), (5,0), (6,0), (4,1), (5,1), (6,1), (4,2), (5,2), (6,2), (4,3), (5,3), (4,4), (5,4)
+    ]
+    grid[:, 6*patch_size:7*patch_size, 3*patch_size:4*patch_size] = right_patches[13]  # UCB
+    grid[:, 6*patch_size:7*patch_size, 4*patch_size:5*patch_size] = right_patches[13]  # UCB
+    grid[:, 7*patch_size:8*patch_size, 0*patch_size:1*patch_size] = right_patches[14]  # UNB
+    grid[:, 7*patch_size:8*patch_size, 1*patch_size:2*patch_size] = right_patches[14]  # UNB
+    grid[:, 7*patch_size:8*patch_size, 2*patch_size:3*patch_size] = right_patches[15]  # DNB
+    grid[:, 7*patch_size:8*patch_size, 3*patch_size:4*patch_size] = right_patches[16]  # DCB
+
+    for i, (r, c) in enumerate(right_indices):
+        grid[:, r*patch_size:(r+1)*patch_size, c*patch_size:(c+1)*patch_size] = right_patches[i]
+
+    return grid
+
+def fill_and_pad_patch_grid(left_patches, right_patches, patch_size=28, final_size=224):
+    grid = fill_patch_grid(left_patches, right_patches, patch_size=patch_size)
+    pad_height = final_size - grid.shape[1]
+    if pad_height > 0:
+        grid = F.pad(grid, (0, 0, 0, pad_height))
+    return grid
+
+

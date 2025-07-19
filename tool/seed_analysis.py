@@ -6,11 +6,16 @@ import numpy as np
 import pandas as pd
 from collections import Counter, defaultdict
 from datetime import datetime
+from PIL import Image
+import copy
+
+from torch.utils.data import Subset
+from torchvision import transforms
 
 import _init_path
 from config import cfg, update_config
 from dataset.joint_patches import FinalSamplesDataset
-from utils.utils import stratified_split_dataset, check_label_distribution_from_subset
+from utils.utils import stratified_split_dataset, check_label_distribution_from_subset, split_dataset_by_patient_id_and_class, get_xray_augmentation
 
 def setup_logger(output_dir):
     os.makedirs(output_dir, exist_ok=True)
@@ -37,26 +42,87 @@ def analyze_seed_dataset(seed: int, cfg):
     cfg.DATASET.SEED = seed
     cfg.freeze()
 
-    dataset = FinalSamplesDataset(cfg)
-    train_dataset, val_dataset, test_dataset = stratified_split_dataset(dataset, seed)
+    # 1. transform 정의
+    train_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
+    ])
+    
+    val_test_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
+    ])
 
-    # 기본 정보 수집
+    # 2. 전체 데이터셋 생성 (인덱스 추출용)
+    dataset = FinalSamplesDataset(cfg, image_transform=val_test_transform)
+
+    # 3. 리스트로 변환 및 split
+    data_list = list(dataset.data.values())
+    train_data, val_data, test_data = split_dataset_by_patient_id_and_class(
+        data_list, val_size=0.2, test_size=0.2, random_state=seed
+    )
+
+    # 4. 인덱스 추출 함수
+    def get_indices_from_entries(dataset, entries):
+        entry_set = set((e['patient_id'], e['file_path']) for e in entries)
+        indices = [
+            idx for idx, v in dataset.data.items()
+            if (v['patient_id'], v['file_path']) in entry_set
+        ]
+        return indices
+
+    train_indices = get_indices_from_entries(dataset, train_data)
+    val_indices = get_indices_from_entries(dataset, val_data)
+    test_indices = get_indices_from_entries(dataset, test_data)
+
+    # 5. subset별로 transform 다르게 적용
+    # train: 증강 포함 (1:1 비율)
+    train_dataset = FinalSamplesDataset(
+        cfg, 
+        image_transform=train_transform,
+        augment_transform=get_xray_augmentation(),
+        augment_ratio=1  # 1:1 비율로 증강
+    )
+    
+    # val/test: 증강 없음
+    val_dataset = FinalSamplesDataset(
+        cfg, 
+        image_transform=val_test_transform,
+        augment_transform=None,
+        augment_ratio=0
+    )
+    
+    test_dataset = FinalSamplesDataset(
+        cfg, 
+        image_transform=val_test_transform,
+        augment_transform=None,
+        augment_ratio=0
+    )
+
+    # 6. Subset 생성
+    train_subset = Subset(train_dataset, train_indices)
+    val_subset = Subset(val_dataset, val_indices)
+    test_subset = Subset(test_dataset, test_indices)
+
+    # 7. 크기 계산
     total_size = len(dataset)
-    train_size = len(train_dataset)
-    val_size = len(val_dataset)
-    test_size = len(test_dataset)
+    train_size = len(train_subset)  # 원본 + 증강본 포함
+    val_size = len(val_subset)
+    test_size = len(test_subset)
 
-    # Patient ID 수집
-    train_patient_ids = [dataset.data[i]['patient_id'] for i in train_dataset.indices]
-    val_patient_ids = [dataset.data[i]['patient_id'] for i in val_dataset.indices]
-    test_patient_ids = [dataset.data[i]['patient_id'] for i in test_dataset.indices]
+    # 8. Patient ID 수집 (원본 기준)
+    train_patient_ids = [train_dataset.data[i]['patient_id'] for i in train_indices]
+    val_patient_ids = [val_dataset.data[i]['patient_id'] for i in val_indices]
+    test_patient_ids = [test_dataset.data[i]['patient_id'] for i in test_indices]
 
-    # 클래스별 분포 수집
-    train_labels = [dataset.data[i]['class_label'] for i in train_dataset.indices]
-    val_labels = [dataset.data[i]['class_label'] for i in val_dataset.indices]
-    test_labels = [dataset.data[i]['class_label'] for i in test_dataset.indices]
+    # 9. 클래스별 분포 수집 (원본 기준)
+    train_labels = [train_dataset.data[i]['class_label'] for i in train_indices]
+    val_labels = [val_dataset.data[i]['class_label'] for i in val_indices]
+    test_labels = [test_dataset.data[i]['class_label'] for i in test_indices]
 
-    # 중복 확인
+    # 10. 중복 확인
     train_val_overlap = set(train_patient_ids) & set(val_patient_ids)
     train_test_overlap = set(train_patient_ids) & set(test_patient_ids)
     val_test_overlap = set(val_patient_ids) & set(test_patient_ids)
@@ -64,7 +130,7 @@ def analyze_seed_dataset(seed: int, cfg):
     return {
         'seed': seed,
         'total_size': total_size,
-        'train_size': train_size,
+        'train_size': train_size,  # 원본 + 증강본 포함
         'val_size': val_size,
         'test_size': test_size,
         'train_patient_ids': train_patient_ids,

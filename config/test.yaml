@@ -8,7 +8,7 @@ DATASET:
   BBOX_CROP_FLAG: False
   DATA_FORMAT: jpg
   INCLUDE_CLASSES: ['oa', 'normal']
-  JSON: data.json
+  JSON: data/json/tmp0418/joint/final_samples_both_only_v2.json
   MEAN: [0.1147, 0.1147, 0.1147]
   PKL: data/pkl/output200x300.pkl
   ROOT: 

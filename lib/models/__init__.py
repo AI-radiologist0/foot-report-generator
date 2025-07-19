@@ -12,6 +12,7 @@ import models.pose_resnet
 import models.feature_extractor
 import models.feature_extractor2
 import models.feature_extractor3
+import models.two_branch_model
 import models.decoder
 from .yolo import YOLOv5
 

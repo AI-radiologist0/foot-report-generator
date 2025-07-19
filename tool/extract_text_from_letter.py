@@ -6,12 +6,20 @@ import easyocr
 import numpy as np
 from torchvision import transforms
 from tqdm import tqdm
+import argparse
+import os
 
 # GPU 사용 여부 확인
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # EasyOCR 모델 로드 (GPU 사용)
 reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Extract text from letter bbox using OCR")
+    parser.add_argument('--json_path', type=str, required=False, default="/home/jmkim/foot-report-generator/data/json/tmp0418/joint/bbox_from_yolo_v3.json", help="Input bbox json file (default: 발 X-ray 기준)")
+    parser.add_argument('--output_path', type=str, required=False, default="/home/jmkim/foot-report-generator/data/json/tmp0418/joint/ocr_results_v3.json", help="Output OCR json file (default: 발 X-ray 기준)")
+    return parser.parse_args()
 
 def load_json(json_path):
     """JSON 파일을 로드하고 데이터 리스트 반환"""
@@ -81,16 +89,20 @@ def process_json(json_path):
     print(f"After Processing remain images : {count}")
     return results
 
-# 경로 설정
-json_path = "/home/jmkim/foot-report-generator/data/json/tmp0418/joint/bbox_from_yolo_v3.json"
-output_path = "/home/jmkim/foot-report-generator/data/json/tmp0418/joint/ocr_results_v3.json"
+if __name__ == "__main__":
+    args = parse_args()
+    json_path = args.json_path
+    output_path = args.output_path
 
-# 실행
-ocr_results = process_json(json_path)
+    ocr_results = process_json(json_path)
 
-# 저장
-with open(output_path, 'w', encoding='utf-8') as f:
-    json.dump(ocr_results, f, ensure_ascii=False, indent=4)
+    # output_path의 상위 폴더가 없으면 생성
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
 
-print(f"\n🎯 OCR 결과 저장 완료: {output_path}")
-print("The number of OCR results: ", len(ocr_results))
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(ocr_results, f, ensure_ascii=False, indent=4)
+
+    print(f"\n🎯 OCR 결과 저장 완료: {output_path}")
+    print("The number of OCR results: ", len(ocr_results))

@@ -16,8 +16,27 @@ def get_patient_id(file_path: str) -> str:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Foot Keypoint Detection Pipeline")
-    parser.add_argument("--json_path", type=str, required=True, help="Path to JSON metadata file")
-    parser.add_argument("--yolo_path", type=str, required=True, help="Path to YOLO model checkpoint")
+    parser.add_argument(
+        "--json_path",
+        type=str,
+        required=False,
+        default="data/json/foot_merge.json",
+        help="Path to JSON metadata file (default: data/json/foot_merge.json)"
+    )
+    parser.add_argument(
+        "--yolo_path",
+        type=str,
+        required=False,
+        default="ckpt/yolo/letter_foot/best.pt",
+        help="Path to YOLO model checkpoint (default: ckpt/yolo/letter_foot/best.pt)"
+    )
+    parser.add_argument(
+        "--output_json_path",
+        type=str,
+        required=False,
+        default="data/json/tmp0418/joint/bbox_from_yolo_new.json",
+        help="Path to save output bbox json file (default: data/json/tmp0418/joint/bbox_from_yolo_new.json)"
+    )
     return parser.parse_args()
 
 # 이미지 로딩을 병렬 처리할 함수
@@ -36,15 +55,32 @@ def generate_patient_image_list(json_file):
     image_paths = []  # 모든 이미지 경로 저장
 
     for record in data["data"]:
-        # patient_id = record["patient_id"]
-        patient_id = get_patient_id(record["file_path"])
-        parent_dir = os.path.dirname(record["file_path"])
-        if patient_id not in patient_dict:
-            patient_dict[patient_id] = []
-        for img_file in os.listdir(parent_dir):
-            if img_file.lower().endswith((".png", ".jpg", ".jpeg")):
-                image_paths.append((patient_id, os.path.join(parent_dir, img_file)))
-    
+        file_paths = record["file_path"]
+        if isinstance(file_paths, list):
+            if not file_paths:
+                continue  # 빈 리스트면 건너뜀
+            for file_path in file_paths:
+                if not file_path:
+                    continue  # 빈 문자열도 건너뜀
+                patient_id = get_patient_id(file_path)
+                parent_dir = os.path.dirname(file_path)
+                if patient_id not in patient_dict:
+                    patient_dict[patient_id] = []
+                for img_file in os.listdir(parent_dir):
+                    if img_file.lower().endswith((".png", ".jpg", ".jpeg")):
+                        image_paths.append((patient_id, os.path.join(parent_dir, img_file)))
+        else:
+            file_path = file_paths
+            if not file_path:
+                continue  # 빈 문자열이면 건너뜀
+            patient_id = get_patient_id(file_path)
+            parent_dir = os.path.dirname(file_path)
+            if patient_id not in patient_dict:
+                patient_dict[patient_id] = []
+            for img_file in os.listdir(parent_dir):
+                if img_file.lower().endswith((".png", ".jpg", ".jpeg")):
+                    image_paths.append((patient_id, os.path.join(parent_dir, img_file)))
+
     # 병렬로 이미지 로드
     with Pool(processes=cpu_count() // 2) as pool:  # CPU 코어 절반 사용
         loaded_images = list(tqdm(pool.imap(load_image, [img[1] for img in image_paths]), 
@@ -54,7 +90,6 @@ def generate_patient_image_list(json_file):
     for (patient_id, image_path), image_data in zip(image_paths, loaded_images):
         if image_data is not None:  # None인 경우 제외
             patient_dict[patient_id].append(image_data)
-
 
     return patient_dict
 
@@ -106,6 +141,7 @@ def main():
     args = parse_args()
     json_file = args.json_path
     yolo_pt = args.yolo_path
+    output_json_path = args.output_json_path
     
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -127,7 +163,10 @@ def main():
     for item in save_json:
         item["image_id"] = file_path_to_id[item["file_path"]]
 
-    output_json_path = "/home/jmkim/foot-report-generator/data/json/tmp0418/joint/bbox_from_yolo_v3.json"
+    # output_json_path로 지정된 폴더가 없으면 생성
+    output_dir = os.path.dirname(output_json_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
     with open(output_json_path, "w") as f:
         json.dump(save_json, f)
     

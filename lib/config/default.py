@@ -81,6 +81,7 @@ _C.DATASET.PKL = 'data/pkl/output.pkl'
 _C.DATASET.USE_PKL = True
 _C.DATASET.USE_RAW = True
 _C.DATASET.USE_PATCH = True
+_C.DATASET.CONCAT_PATCH = True
 _C.DATASET.REPORT = False
 
 

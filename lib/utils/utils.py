@@ -546,7 +546,7 @@ def stratified_split_dataset(dataset, seed=42):
     return Subset(dataset, train_idx), Subset(dataset, val_idx), Subset(dataset, test_idx)
 
 
-from collections import Counter
+from collections import Counter, defaultdict
 
 def check_label_distribution_from_subset(subset, name=""):
     base_dataset = subset.dataset
@@ -562,3 +562,55 @@ def check_label_distribution_from_subset(subset, name=""):
     logging.info(f"\n📊 {name} 분포:")
     for cls, count in sorted(dist.items()):
         logging.info(f"  클래스 {cls}: {count}개")
+
+
+
+def split_dataset_by_patient_id_and_class(data, val_size=0.2, test_size=0.2, random_state=42):
+    """
+    같은 환자의 데이터는 반드시 동일한 서브셋(train, val, test)에 포함되도록 분할하며,
+    클래스의 균형을 유지합니다.
+    
+    Args:
+        data (list of dict): 데이터셋 리스트, 각 데이터는 딕셔너리 형태로 구성
+                             (예: {"patient_id": ..., "file_path": ..., "label": ...})
+        val_size (float): Validation 데이터셋의 비율
+        test_size (float): Test 데이터셋의 비율
+        random_state (int): 랜덤 시드
+
+    Returns:
+        train_data (list of dict): 학습 데이터셋
+        val_data (list of dict): 검증 데이터셋
+        test_data (list of dict): 테스트 데이터셋
+    """
+    random.seed(random_state)
+    
+    # 1. 클래스별로 데이터를 그룹화
+    class_to_patients = defaultdict(list)
+    for entry in data:
+        class_to_patients[entry['class_label']].append(entry['patient_id'])
+    
+    # 2. 각 클래스 내에서 patient_id를 고유하게 유지
+    for label in class_to_patients:
+        class_to_patients[label] = list(set(class_to_patients[label]))
+    
+    # 3. 클래스별로 train/val/test로 분할
+    train_data, val_data, test_data = [], [], []
+    
+    for label, patient_ids in class_to_patients.items():
+        # Shuffle patient_ids to ensure randomness
+        random.shuffle(patient_ids)
+        
+        # Split patient_ids into train, val, test
+        test_split = int(len(patient_ids) * test_size)
+        val_split = int(len(patient_ids) * val_size)
+        
+        test_patients = patient_ids[:test_split]
+        val_patients = patient_ids[test_split:test_split + val_split]
+        train_patients = patient_ids[test_split + val_split:]
+        
+        # Assign data to train/val/test based on patient_id
+        train_data.extend([entry for entry in data if entry['patient_id'] in train_patients and entry['class_label'] == label])
+        val_data.extend([entry for entry in data if entry['patient_id'] in val_patients and entry['class_label'] == label])
+        test_data.extend([entry for entry in data if entry['patient_id'] in test_patients and entry['class_label'] == label])
+    
+    return train_data, val_data, test_data

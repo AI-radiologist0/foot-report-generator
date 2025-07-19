@@ -36,12 +36,14 @@ KFOLD:
 LOG_DIR: 
 MODEL:
   INIT_WEIGHTS: True
-  NAME: feature_extractor3
+  NAME: two_branch_model
   PRETRAINED: True
   EXTRA:
     WITH_ATTN: False
     ONLYCAT: True
     VIEWCAT: False
+    RAW: swin-t
+    PATCH: resnet
   FREEZE:
     BACKBONE: False
     PROJECTION: False

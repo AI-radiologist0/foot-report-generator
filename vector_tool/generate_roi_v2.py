@@ -10,7 +10,8 @@ from tqdm import tqdm
 PATCH_SIZE = (224, 224)
 CROP_SIZE = (200, 300)
 MAX_PATCHES = 34
-SAVE_PATH = "data/pkl/final_output_left_right_ordered.pkl"
+# SAVE_PATH = "data/pkl/final_output_left_right_ordered.pkl" #0418 before
+SAVE_PATH = "data/pkl/final_output_left_right_ordered.pkl" 
 # ----------------------
 
 def extract_patches_from_keypoints(image, keypoints_side, patch_size=PATCH_SIZE, crop_size=CROP_SIZE):
